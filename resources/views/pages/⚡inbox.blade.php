@@ -202,7 +202,7 @@ new #[Title('Innboks')] class extends Component
                     size="sm"
                     :variant="$suggested ? 'primary' : 'ghost'"
                     wire:click="assign('{{ $category->value }}')"
-                    @if ($suggested) data-suggested="1" @endif
+                    :data-suggested="$suggested ? '1' : null"
                 >
                     {{ $category->value }}
                     @if ($suggested)

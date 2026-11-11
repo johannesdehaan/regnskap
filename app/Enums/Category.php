@@ -4,7 +4,6 @@ namespace App\Enums;
 
 enum Category: string
 {
-    case O = 'O';
     case Dagligvarer = 'Dagligvarer';
     case Servering = 'Servering';
     case BollerOgBrus = 'Boller og brus';
