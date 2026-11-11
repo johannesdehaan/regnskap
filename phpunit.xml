@@ -32,5 +32,8 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="SPAREBANK1_CLIENT_ID" value="test-client"/>
+        <env name="SPAREBANK1_CLIENT_SECRET" value="test-secret"/>
+        <env name="SPAREBANK1_REDIRECT_URI" value="https://personlig-regnskap-production-huok0y.laravel.cloud/sparebank1/callback"/>
     </php>
 </phpunit>
