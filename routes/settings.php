@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Sparebank1Controller;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth'])->group(function () {
@@ -10,6 +11,10 @@ Route::middleware(['auth'])->group(function () {
 });
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    Route::livewire('settings/bank', 'pages::settings.bank')->name('settings.bank');
+    Route::get('sparebank1/connect', [Sparebank1Controller::class, 'connect'])->name('sparebank1.connect');
+    Route::get('sparebank1/callback', [Sparebank1Controller::class, 'callback'])->name('sparebank1.callback');
+
     Route::livewire('settings/appearance', 'pages::settings.appearance')->name('appearance.edit');
 
     Route::livewire('settings/security', 'pages::settings.security')

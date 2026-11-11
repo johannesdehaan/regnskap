@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -52,6 +53,14 @@ class User extends Authenticatable implements PasskeyUser
             'food_budget_amount' => 'decimal:2',
             'food_budget_window_days' => 'integer',
         ];
+    }
+
+    /**
+     * @return HasOne<BankConnection, $this>
+     */
+    public function bankConnection(): HasOne
+    {
+        return $this->hasOne(BankConnection::class);
     }
 
     /**

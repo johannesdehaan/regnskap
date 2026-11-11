@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\BookingStatus;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use Database\Factories\TransactionFactory;
@@ -30,10 +31,14 @@ use Illuminate\Support\Carbon;
  * @property string|null $note
  * @property bool $exclude_from_budget
  * @property bool $needs_review
+ * @property string|null $external_id
+ * @property int|null $bank_account_id
+ * @property BookingStatus|null $booking_status
+ * @property string|null $dedupe_key
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'payee', 'payment_method', 'note', 'exclude_from_budget', 'needs_review'])]
+#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'payee', 'payment_method', 'note', 'exclude_from_budget', 'needs_review', 'external_id', 'bank_account_id', 'booking_status', 'dedupe_key'])]
 class Transaction extends Model
 {
     /** @use HasFactory<TransactionFactory> */
@@ -51,6 +56,7 @@ class Transaction extends Model
             'payment_method' => PaymentMethod::class,
             'exclude_from_budget' => 'boolean',
             'needs_review' => 'boolean',
+            'booking_status' => BookingStatus::class,
         ];
     }
 
@@ -60,6 +66,14 @@ class Transaction extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * @return BelongsTo<BankAccount, $this>
+     */
+    public function bankAccount(): BelongsTo
+    {
+        return $this->belongsTo(BankAccount::class);
     }
 
     /**
@@ -88,7 +102,9 @@ class Transaction extends Model
         $query->whereNull('parent_id')
             ->whereDoesntHave('children')
             ->where(function (Builder $inner): void {
-                $inner->whereNull('category')->orWhere('needs_review', true);
+                $inner->where(function (Builder $uncategorized): void {
+                    $uncategorized->whereNull('category')->where('exclude_from_budget', false);
+                })->orWhere('needs_review', true);
             });
     }
 }
