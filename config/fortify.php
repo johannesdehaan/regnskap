@@ -162,7 +162,7 @@ return [
 
     'features' => [
         Features::registration(),
-        Features::resetPasswords(),
+        // No outgoing mail is configured, so a reset link would never arrive.
         Features::emailVerification(),
         Features::twoFactorAuthentication([
             'confirm' => true,
