@@ -28,10 +28,12 @@ use Illuminate\Support\Carbon;
  * @property string $payee
  * @property PaymentMethod|null $payment_method
  * @property string|null $note
+ * @property bool $exclude_from_budget
+ * @property bool $needs_review
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'payee', 'payment_method', 'note'])]
+#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'payee', 'payment_method', 'note', 'exclude_from_budget', 'needs_review'])]
 class Transaction extends Model
 {
     /** @use HasFactory<TransactionFactory> */
@@ -47,6 +49,8 @@ class Transaction extends Model
             'amount' => 'decimal:2',
             'category' => Category::class,
             'payment_method' => PaymentMethod::class,
+            'exclude_from_budget' => 'boolean',
+            'needs_review' => 'boolean',
         ];
     }
 
@@ -81,8 +85,10 @@ class Transaction extends Model
      */
     public function scopeInbox(Builder $query): void
     {
-        $query->whereNull('category')
-            ->whereNull('parent_id')
-            ->whereDoesntHave('children');
+        $query->whereNull('parent_id')
+            ->whereDoesntHave('children')
+            ->where(function (Builder $inner): void {
+                $inner->whereNull('category')->orWhere('needs_review', true);
+            });
     }
 }

@@ -33,6 +33,8 @@ class UserFactory extends Factory
             'two_factor_secret' => null,
             'two_factor_recovery_codes' => null,
             'two_factor_confirmed_at' => null,
+            'food_budget_amount' => '1400.00',
+            'food_budget_window_days' => 7,
         ];
     }
 

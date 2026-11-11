@@ -6,6 +6,7 @@ enum Category: string
 {
     case O = 'O';
     case Dagligvarer = 'Dagligvarer';
+    case Servering = 'Servering';
     case BollerOgBrus = 'Boller og brus';
     case TingTilHjemmet = 'Ting til hjemmet';
     case Bokostnader = 'Bokostnader';
@@ -50,5 +51,13 @@ enum Category: string
         }
 
         return null;
+    }
+
+    public function countsAsFood(): bool
+    {
+        return match ($this) {
+            self::Dagligvarer, self::BollerOgBrus, self::Servering => true,
+            default => false,
+        };
     }
 }

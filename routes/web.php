@@ -18,6 +18,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('transactions/create', 'pages::transactions.create')->name('transactions.create');
     Route::livewire('transactions/import', 'pages::transactions.import')->name('transactions.import');
 
+    Route::livewire('mat', 'pages::mat.index')->name('mat.index');
+    Route::livewire('mat/regler', 'pages::mat.rules')->name('mat.rules');
+
     Route::livewire('budget', 'pages::budget.index')->name('budget.index');
     Route::livewire('wealth', 'pages::wealth.index')->name('wealth.index');
     Route::livewire('investments', 'pages::investments.index')->name('investments.index');

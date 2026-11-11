@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Actions\ClassifyFoodPurchase;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Http\Controllers\Controller;
@@ -66,15 +67,34 @@ class TransactionController extends Controller
             'category' => ['nullable', Rule::enum(Category::class)],
             'payment_method' => ['nullable', Rule::enum(PaymentMethod::class)],
             'note' => ['nullable', 'string'],
+            'needs_review' => ['sometimes', 'boolean'],
+            'exclude_from_budget' => ['sometimes', 'boolean'],
         ]);
 
         $validated['amount'] = number_format(abs((float) $validated['amount']), 2, '.', '');
-        $validated['category'] = filled($validated['category'] ?? null)
+        $explicitCategory = filled($validated['category'] ?? null);
+        $validated['category'] = $explicitCategory
             ? Category::from($validated['category'])
             : null;
         $validated['payment_method'] = filled($validated['payment_method'] ?? null)
             ? PaymentMethod::from($validated['payment_method'])
             : null;
+
+        if (! $explicitCategory || ! array_key_exists('needs_review', $validated)) {
+            $classification = app(ClassifyFoodPurchase::class)(
+                $this->user($request),
+                $validated['payee'],
+                $validated['note'] ?? null,
+            );
+
+            if (! $explicitCategory) {
+                $validated['category'] = $classification->category;
+            }
+
+            if (! array_key_exists('needs_review', $validated)) {
+                $validated['needs_review'] = $explicitCategory ? false : $classification->needsReview;
+            }
+        }
 
         $transaction = $this->user($request)->transactions()->create($validated);
 
@@ -89,6 +109,8 @@ class TransactionController extends Controller
             'category' => ['sometimes', 'nullable', Rule::enum(Category::class)],
             'payment_method' => ['sometimes', 'nullable', Rule::enum(PaymentMethod::class)],
             'note' => ['sometimes', 'nullable', 'string'],
+            'needs_review' => ['sometimes', 'boolean'],
+            'exclude_from_budget' => ['sometimes', 'boolean'],
         ]);
 
         if (array_key_exists('category', $validated)) {

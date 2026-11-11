@@ -15,6 +15,9 @@
                     <flux:sidebar.item icon="inbox" :href="route('inbox')" :current="request()->routeIs('inbox')" wire:navigate>
                         {{ __('Innboks') }}
                     </flux:sidebar.item>
+                    <flux:sidebar.item icon="shopping-bag" :href="route('mat.index')" :current="request()->routeIs('mat.*')" wire:navigate>
+                        {{ __('Matbudsjett') }}
+                    </flux:sidebar.item>
                     <flux:sidebar.item icon="chart-bar" :href="route('overview')" :current="request()->routeIs('overview')" wire:navigate>
                         {{ __('Oversikt') }}
                     </flux:sidebar.item>

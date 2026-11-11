@@ -27,10 +27,12 @@ use Laravel\Sanctum\HasApiTokens;
  * @property string|null $two_factor_recovery_codes
  * @property Carbon|null $two_factor_confirmed_at
  * @property string|null $remember_token
+ * @property string $food_budget_amount
+ * @property int $food_budget_window_days
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['name', 'email', 'password'])]
+#[Fillable(['name', 'email', 'password', 'food_budget_amount', 'food_budget_window_days'])]
 #[Hidden(['password', 'two_factor_secret', 'two_factor_recovery_codes', 'remember_token'])]
 class User extends Authenticatable implements PasskeyUser
 {
@@ -47,6 +49,8 @@ class User extends Authenticatable implements PasskeyUser
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'food_budget_amount' => 'decimal:2',
+            'food_budget_window_days' => 'integer',
         ];
     }
 
@@ -104,6 +108,14 @@ class User extends Authenticatable implements PasskeyUser
     public function accounts(): HasMany
     {
         return $this->hasMany(Account::class);
+    }
+
+    /**
+     * @return HasMany<FoodRule, $this>
+     */
+    public function foodRules(): HasMany
+    {
+        return $this->hasMany(FoodRule::class);
     }
 
     /**
