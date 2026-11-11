@@ -1,7 +1,10 @@
 <?php
 
+use App\Actions\BuildFoodBudget;
 use App\Actions\SplitTransaction;
 use App\Enums\Category;
+use App\Enums\FoodRuleEffect;
+use App\Enums\FoodRuleMatch;
 use App\Models\CategoryRule;
 use App\Models\Transaction;
 use Flux\Flux;
@@ -22,6 +25,8 @@ new #[Title('Innboks')] class extends Component
 
     public string $splitCategoryB = '';
 
+    public bool $saveAsRule = false;
+
     public function mount(): void
     {
         $this->authorize('viewAny', Transaction::class);
@@ -34,7 +39,17 @@ new #[Title('Innboks')] class extends Component
 
         $this->transactionId = $next?->id;
         $this->splitting = false;
+        $this->saveAsRule = false;
         $this->reset('splitAmount', 'splitCategoryA', 'splitCategoryB');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    #[Computed]
+    public function foodBudget(): array
+    {
+        return app(BuildFoodBudget::class)(Auth::user());
     }
 
     #[Computed]
@@ -84,10 +99,28 @@ new #[Title('Innboks')] class extends Component
     {
         $transaction = $this->currentForUpdate();
 
+        $chosen = Category::from($category);
+
         $transaction->update([
-            'category' => Category::from($category),
+            'category' => $chosen,
+            'needs_review' => false,
         ]);
 
+        if ($this->saveAsRule && trim($transaction->payee) !== '') {
+            Auth::user()->foodRules()->updateOrCreate(
+                [
+                    'pattern' => trim($transaction->payee),
+                    'match_type' => FoodRuleMatch::Contains->value,
+                ],
+                [
+                    'effect' => $chosen->countsAsFood() ? FoodRuleEffect::Count : FoodRuleEffect::Exclude,
+                    'category' => $chosen,
+                    'priority' => 110,
+                ],
+            );
+        }
+
+        unset($this->foodBudget);
         $this->loadNext();
     }
 
@@ -134,6 +167,8 @@ new #[Title('Innboks')] class extends Component
 }; ?>
 
 <div class="mx-auto flex w-full max-w-lg flex-col gap-6 py-4">
+    <x-food-budget-summary :status="$this->foodBudget" linked />
+
     <div class="flex items-baseline justify-between gap-4">
         <flux:heading size="xl">{{ __('Innboks') }}</flux:heading>
         <flux:text>{{ $this->remaining }} {{ __('igjen') }}</flux:text>
@@ -145,6 +180,9 @@ new #[Title('Innboks')] class extends Component
                 {{ number_format((float) $this->transaction->amount, 2, ',', ' ') }} kr
             </p>
             <flux:heading size="lg">{{ $this->transaction->payee }}</flux:heading>
+            @if ($this->transaction->needs_review)
+                <p class="text-sm font-medium text-amber-700 dark:text-amber-300">{{ __('Må vurderes') }}</p>
+            @endif
             <flux:text>
                 {{ $this->transaction->booked_on->format('d.m.Y') }}
                 @if ($this->transaction->payment_method)
@@ -173,6 +211,11 @@ new #[Title('Innboks')] class extends Component
                 </flux:button>
             @endforeach
         </div>
+
+        <label class="flex items-center justify-center gap-2 text-sm">
+            <input type="checkbox" wire:model="saveAsRule" class="rounded border-zinc-300 dark:border-zinc-600" />
+            <span>{{ __('Lagre som regel for dette brukerstedet') }}</span>
+        </label>
 
         <div class="flex justify-center gap-3">
             <flux:button variant="subtle" wire:click="skip">{{ __('Hopp over') }}</flux:button>

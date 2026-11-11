@@ -87,6 +87,20 @@ new #[Title('Transaksjoner')] class extends Component
 
         return $query->paginate(20);
     }
+
+    public function toggleExcluded(int $id): void
+    {
+        $transaction = Auth::user()->transactions()->findOrFail($id);
+        $this->authorize('update', $transaction);
+        $transaction->update(['exclude_from_budget' => ! $transaction->exclude_from_budget]);
+    }
+
+    public function toggleReview(int $id): void
+    {
+        $transaction = Auth::user()->transactions()->findOrFail($id);
+        $this->authorize('update', $transaction);
+        $transaction->update(['needs_review' => ! $transaction->needs_review]);
+    }
 }; ?>
 
 <div class="mx-auto flex w-full max-w-2xl flex-col gap-6 py-4">
@@ -126,6 +140,20 @@ new #[Title('Transaksjoner')] class extends Component
                 @if ($transaction->note)
                     <flux:text class="mt-1 text-sm">{{ $transaction->note }}</flux:text>
                 @endif
+                <div class="mt-3 flex flex-wrap gap-2">
+                    @if ($transaction->needs_review)
+                        <span class="text-xs font-medium text-amber-700 dark:text-amber-300">{{ __('Må vurderes') }}</span>
+                    @endif
+                    @if ($transaction->exclude_from_budget)
+                        <span class="text-xs font-medium">{{ __('Utenfor matbudsjettet') }}</span>
+                    @endif
+                    <flux:button size="sm" variant="subtle" wire:click="toggleExcluded({{ $transaction->id }})">
+                        {{ $transaction->exclude_from_budget ? __('Ta med i matbudsjettet') : __('Utenfor matbudsjettet') }}
+                    </flux:button>
+                    <flux:button size="sm" variant="subtle" wire:click="toggleReview({{ $transaction->id }})">
+                        {{ $transaction->needs_review ? __('Vurdert') : __('Må vurderes') }}
+                    </flux:button>
+                </div>
             </div>
         @empty
             <flux:text>{{ __('Ingen transaksjoner matcher filtrene.') }}</flux:text>

@@ -16,7 +16,7 @@ test('a ledger csv keeps category payment method and note', function () {
     $csv = implode("\n", [
         'dato,belop,kategori,brukersted,betalingsmate,notat',
         '2026-03-02,129.00,Dagligvarer,Testbutikk,Kredittkort,Melk og brød',
-        '2026-03-03,40.00,Ukjent post,Rar kiosk,Kredittkort,Skal i innboks',
+        '2026-03-03,40.00,Ukjent post,Rar butikk,Kredittkort,Skal i innboks',
         '',
     ]);
 
@@ -26,7 +26,7 @@ test('a ledger csv keeps category payment method and note', function () {
         ->assertHasNoErrors();
 
     $kept = $user->transactions()->where('payee', 'Testbutikk')->first();
-    $unknown = $user->transactions()->where('payee', 'Rar kiosk')->first();
+    $unknown = $user->transactions()->where('payee', 'Rar butikk')->first();
 
     expect($kept)->not->toBeNull()
         ->and($kept->category)->toBe(Category::Dagligvarer)

@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\ClassifyFoodPurchase;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Models\Transaction;
@@ -22,6 +23,8 @@ new #[Title('Ny transaksjon')] class extends Component
     public ?string $payment_method = null;
 
     public string $note = '';
+
+    public bool $exclude_from_budget = false;
 
     public function mount(): void
     {
@@ -49,6 +52,19 @@ new #[Title('Ny transaksjon')] class extends Component
         $validated['payment_method'] = $validated['payment_method'] !== null && $validated['payment_method'] !== ''
             ? PaymentMethod::from($validated['payment_method'])
             : null;
+        $validated['exclude_from_budget'] = $this->exclude_from_budget;
+
+        $explicitCategory = $validated['category'] instanceof Category;
+
+        if (! $explicitCategory) {
+            $classification = app(ClassifyFoodPurchase::class)(
+                Auth::user(),
+                $validated['payee'],
+                $validated['note'] !== '' ? $validated['note'] : null,
+            );
+            $validated['category'] = $classification->category;
+            $validated['needs_review'] = $classification->needsReview;
+        }
 
         Auth::user()->transactions()->create($validated);
 
@@ -78,6 +94,10 @@ new #[Title('Ny transaksjon')] class extends Component
             @endforeach
         </flux:select>
         <flux:textarea wire:model="note" :label="__('Notat')" rows="3" />
+        <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" wire:model="exclude_from_budget" class="rounded border-zinc-300 dark:border-zinc-600" />
+            <span>{{ __('Utenfor matbudsjettet') }}</span>
+        </label>
         <flux:button type="submit" variant="primary">{{ __('Lagre') }}</flux:button>
     </form>
 </div>

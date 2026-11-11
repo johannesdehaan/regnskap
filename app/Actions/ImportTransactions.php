@@ -44,6 +44,7 @@ class ImportTransactions
 
         $imported = 0;
         $skipped = 0;
+        $classifier = app(ClassifyFoodPurchase::class);
 
         foreach ($this->dataRows($rows, $mapping) as $row) {
             $date = $this->parseDate($row[$mapping['date']] ?? null);
@@ -83,6 +84,14 @@ class ImportTransactions
                 $note = $note === '' ? null : $note;
             }
 
+            $needsReview = false;
+
+            if (! $category instanceof Category) {
+                $classification = $classifier($user, $payee, $note);
+                $category = $classification->category;
+                $needsReview = $classification->needsReview;
+            }
+
             Transaction::query()->create([
                 'user_id' => $user->id,
                 'booked_on' => $date,
@@ -91,6 +100,7 @@ class ImportTransactions
                 'category' => $category,
                 'payment_method' => $paymentMethod,
                 'note' => $note,
+                'needs_review' => $needsReview,
             ]);
 
             $imported++;

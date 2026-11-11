@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Actions\SeedFoodRules;
+use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +38,10 @@ class AppServiceProvider extends ServiceProvider
         DB::prohibitDestructiveCommands(
             app()->isProduction(),
         );
+
+        User::created(function (User $user): void {
+            app(SeedFoodRules::class)($user);
+        });
 
         Password::defaults(fn (): ?Password => app()->isProduction()
             ? Password::min(12)

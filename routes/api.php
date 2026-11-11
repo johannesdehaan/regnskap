@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\BudgetLineController;
+use App\Http\Controllers\Api\FoodBudgetController;
+use App\Http\Controllers\Api\FoodRuleController;
 use App\Http\Controllers\Api\HoldingController;
 use App\Http\Controllers\Api\HousingPlanController;
 use App\Http\Controllers\Api\MeController;
@@ -51,4 +53,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/accounts/{account}', [AccountController::class, 'destroy']);
 
     Route::get('/overview', OverviewController::class);
+
+    Route::get('/food-budget', [FoodBudgetController::class, 'show']);
+    Route::patch('/food-budget', [FoodBudgetController::class, 'update']);
+
+    Route::get('/food-rules', [FoodRuleController::class, 'index']);
+    Route::post('/food-rules', [FoodRuleController::class, 'store']);
+    Route::patch('/food-rules/{foodRule}', [FoodRuleController::class, 'update']);
+    Route::delete('/food-rules/{foodRule}', [FoodRuleController::class, 'destroy']);
 });
