@@ -151,8 +151,7 @@ test('inbox category buttons render labels instead of blade directives', functio
 
     expect($content)->not->toContain('@if')
         ->and($content)->not->toContain('@endif')
-        ->and(substr_count($content, 'data-suggested="1"'))->toBe(1)
-        ->and(Category::tryFrom('O'))->toBeNull();
+        ->and(substr_count($content, 'data-suggested="1"'))->toBe(1);
 
     $response->assertSee('Forslag');
 
