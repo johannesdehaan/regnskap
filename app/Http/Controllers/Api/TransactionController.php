@@ -3,14 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Actions\ClassifyFoodPurchase;
+use App\Actions\SplitTransactionLines;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
+use App\Enums\Subcategory;
 use App\Http\Controllers\Controller;
 use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class TransactionController extends Controller
 {
@@ -27,6 +30,12 @@ class TransactionController extends Controller
         ]);
 
         $query = $this->user($request)->transactions()->orderByDesc('booked_on')->orderByDesc('id');
+
+        if ($request->boolean('inbox')) {
+            $query->inbox();
+        } else {
+            $query->excludingSplitParents();
+        }
 
         if (! empty($validated['month'])) {
             $start = $validated['month'].'-01';
@@ -49,10 +58,6 @@ class TransactionController extends Controller
             });
         }
 
-        if ($request->boolean('inbox')) {
-            $query->inbox();
-        }
-
         return response()->json($query->get());
     }
 
@@ -65,6 +70,7 @@ class TransactionController extends Controller
             'amount' => ['required', 'numeric', 'gt:0'],
             'payee' => ['required', 'string', 'max:255'],
             'category' => ['nullable', Rule::enum(Category::class)],
+            'subcategory' => ['nullable', Rule::enum(Subcategory::class)],
             'payment_method' => ['nullable', Rule::enum(PaymentMethod::class)],
             'note' => ['nullable', 'string'],
             'needs_review' => ['sometimes', 'boolean'],
@@ -75,6 +81,9 @@ class TransactionController extends Controller
         $explicitCategory = filled($validated['category'] ?? null);
         $validated['category'] = $explicitCategory
             ? Category::from($validated['category'])
+            : null;
+        $validated['subcategory'] = filled($validated['subcategory'] ?? null)
+            ? Subcategory::from($validated['subcategory'])
             : null;
         $validated['payment_method'] = filled($validated['payment_method'] ?? null)
             ? PaymentMethod::from($validated['payment_method'])
@@ -96,6 +105,13 @@ class TransactionController extends Controller
             }
         }
 
+        $category = $validated['category'];
+        $subcategory = $validated['subcategory'];
+        $this->ensureSubcategory(
+            $category instanceof Category ? $category : null,
+            $subcategory instanceof Subcategory ? $subcategory : null,
+        );
+
         $transaction = $this->user($request)->transactions()->create($validated);
 
         return response()->json($transaction, 201);
@@ -107,6 +123,7 @@ class TransactionController extends Controller
 
         $validated = $request->validate([
             'category' => ['sometimes', 'nullable', Rule::enum(Category::class)],
+            'subcategory' => ['sometimes', 'nullable', Rule::enum(Subcategory::class)],
             'payment_method' => ['sometimes', 'nullable', Rule::enum(PaymentMethod::class)],
             'note' => ['sometimes', 'nullable', 'string'],
             'needs_review' => ['sometimes', 'boolean'],
@@ -119,14 +136,93 @@ class TransactionController extends Controller
                 : null;
         }
 
+        if (array_key_exists('subcategory', $validated)) {
+            $validated['subcategory'] = filled($validated['subcategory'])
+                ? Subcategory::from($validated['subcategory'])
+                : null;
+        }
+
         if (array_key_exists('payment_method', $validated)) {
             $validated['payment_method'] = filled($validated['payment_method'])
                 ? PaymentMethod::from($validated['payment_method'])
                 : null;
         }
 
+        if (array_key_exists('category', $validated) || array_key_exists('subcategory', $validated)) {
+            $category = array_key_exists('category', $validated) ? $validated['category'] : $transaction->category;
+            $subcategory = array_key_exists('subcategory', $validated) ? $validated['subcategory'] : $transaction->subcategory;
+            $this->ensureSubcategory(
+                $category instanceof Category ? $category : null,
+                $subcategory instanceof Subcategory ? $subcategory : null,
+            );
+        }
+
         $transaction->update($validated);
 
         return response()->json($transaction->refresh());
+    }
+
+    public function split(Request $request, Transaction $transaction, SplitTransactionLines $lines): JsonResponse
+    {
+        $this->authorize('update', $transaction);
+
+        $validated = $request->validate([
+            'lines' => ['required', 'array', 'min:1', 'max:20'],
+            'lines.*.category' => ['required', Rule::enum(Category::class)],
+            'lines.*.subcategory' => ['nullable', Rule::enum(Subcategory::class)],
+            'lines.*.amount' => ['required', 'numeric', 'gt:0'],
+            'lines.*.note' => ['nullable', 'string'],
+        ]);
+
+        $parent = $lines->replace($transaction, $this->splitLines($validated['lines']));
+
+        return response()->json($parent);
+    }
+
+    public function destroySplit(Transaction $transaction, SplitTransactionLines $lines): JsonResponse
+    {
+        $this->authorize('update', $transaction);
+
+        return response()->json($lines->clear($transaction));
+    }
+
+    private function ensureSubcategory(?Category $category, ?Subcategory $subcategory): void
+    {
+        if (! $subcategory instanceof Subcategory) {
+            return;
+        }
+
+        if (! $category instanceof Category || $subcategory->category() !== $category) {
+            throw ValidationException::withMessages([
+                'subcategory' => 'Underkategorien hører ikke til kategorien.',
+            ]);
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lines
+     * @return list<array{category: Category, subcategory: Subcategory|null, amount: string, note: string|null}>
+     */
+    private function splitLines(array $lines): array
+    {
+        $parsed = [];
+
+        foreach ($lines as $line) {
+            $category = Category::from((string) $line['category']);
+            $subcategory = filled($line['subcategory'] ?? null)
+                ? Subcategory::from((string) $line['subcategory'])
+                : null;
+            $amount = $line['amount'];
+            $note = $line['note'] ?? null;
+
+            $parsed[] = [
+                'category' => $category,
+                'subcategory' => $subcategory,
+                'amount' => is_string($amount) ? $amount : (string) $amount,
+                'note' => is_string($note) && $note !== '' ? $note : null,
+            ];
+        }
+
+        return $parsed;
     }
 }

@@ -62,7 +62,7 @@ new #[Title('Transaksjoner')] class extends Component
     #[Computed]
     public function transactions(): LengthAwarePaginator
     {
-        $query = Auth::user()->transactions()->orderByDesc('booked_on')->orderByDesc('id');
+        $query = Auth::user()->transactions()->excludingSplitParents()->orderByDesc('booked_on')->orderByDesc('id');
 
         if ($this->month !== '' && preg_match('/^\d{4}-\d{2}$/', $this->month) === 1) {
             $start = $this->month.'-01';
@@ -133,6 +133,9 @@ new #[Title('Transaksjoner')] class extends Component
                 <flux:text class="mt-1 text-sm">
                     {{ $transaction->booked_on->format('d.m.Y') }}
                     · {{ $transaction->category?->value ?? __('Ukategorisert') }}
+                    @if ($transaction->subcategory)
+                        · {{ $transaction->subcategory->value }}
+                    @endif
                     @if ($transaction->payment_method)
                         · {{ $transaction->payment_method->value }}
                     @endif

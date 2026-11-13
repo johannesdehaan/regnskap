@@ -185,10 +185,19 @@ new #[Title('Innboks')] class extends Component
             @endif
             <flux:text>
                 {{ $this->transaction->booked_on->format('d.m.Y') }}
+                @if ($this->transaction->category)
+                    · {{ $this->transaction->category->value }}
+                @endif
+                @if ($this->transaction->subcategory)
+                    · {{ $this->transaction->subcategory->value }}
+                @endif
                 @if ($this->transaction->payment_method)
                     · {{ $this->transaction->payment_method->value }}
                 @endif
             </flux:text>
+            @if ($this->transaction->children()->exists())
+                <flux:text>{{ __('Beløpet er endret etter deling. En ny deling erstatter de gamle linjene.') }}</flux:text>
+            @endif
             @if ($this->transaction->note)
                 <flux:text class="text-sm">{{ $this->transaction->note }}</flux:text>
             @endif

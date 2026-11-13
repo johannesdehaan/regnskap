@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\BookingStatus;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
+use App\Enums\Subcategory;
 use Database\Factories\TransactionFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -15,10 +16,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
 
 /**
- * A transaction can be split into two child rows. The parent stays in the
- * database (uncategorized) as an audit trail of the original imported amount.
- * Inbox excludes parents that have children — they are "categorized away" by
- * the split rather than deleted, which keeps foreign keys and history intact.
+ * A transaction can be split into child rows. The parent stays in the
+ * database as the bank row. Budgets, monthly overviews and the transaction
+ * list count a split only through its children. A parent returns to the inbox
+ * when needs_review is set again, for example after the bank amount changes.
  *
  * @property int $id
  * @property int $user_id
@@ -26,6 +27,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon $booked_on
  * @property string $amount
  * @property Category|null $category
+ * @property Subcategory|null $subcategory
  * @property string $payee
  * @property PaymentMethod|null $payment_method
  * @property string|null $note
@@ -38,7 +40,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'payee', 'payment_method', 'note', 'exclude_from_budget', 'needs_review', 'external_id', 'bank_account_id', 'booking_status', 'dedupe_key'])]
+#[Fillable(['user_id', 'parent_id', 'booked_on', 'amount', 'category', 'subcategory', 'payee', 'payment_method', 'note', 'exclude_from_budget', 'needs_review', 'external_id', 'bank_account_id', 'booking_status', 'dedupe_key'])]
 class Transaction extends Model
 {
     /** @use HasFactory<TransactionFactory> */
@@ -53,6 +55,7 @@ class Transaction extends Model
             'booked_on' => 'date',
             'amount' => 'decimal:2',
             'category' => Category::class,
+            'subcategory' => Subcategory::class,
             'payment_method' => PaymentMethod::class,
             'exclude_from_budget' => 'boolean',
             'needs_review' => 'boolean',
@@ -93,18 +96,31 @@ class Transaction extends Model
     }
 
     /**
-     * Uncategorized top-level rows that have not been split away.
+     * Top-level rows that still need a decision. A finished split leaves the
+     * inbox, and comes back when the parent is flagged for review.
      *
      * @param  Builder<Transaction>  $query
      */
     public function scopeInbox(Builder $query): void
     {
         $query->whereNull('parent_id')
-            ->whereDoesntHave('children')
             ->where(function (Builder $inner): void {
                 $inner->where(function (Builder $uncategorized): void {
-                    $uncategorized->whereNull('category')->where('exclude_from_budget', false);
+                    $uncategorized->whereDoesntHave('children')
+                        ->whereNull('category')
+                        ->where('exclude_from_budget', false);
                 })->orWhere('needs_review', true);
             });
+    }
+
+    /**
+     * Rows that represent spend. A split parent is the bank total; its
+     * children are what budgets and lists add up.
+     *
+     * @param  Builder<Transaction>  $query
+     */
+    public function scopeExcludingSplitParents(Builder $query): void
+    {
+        $query->whereDoesntHave('children');
     }
 }

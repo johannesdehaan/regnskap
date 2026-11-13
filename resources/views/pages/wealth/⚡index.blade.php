@@ -79,6 +79,7 @@ new #[Title('Formue')] class extends Component
         $end = $this->monthDate()->endOfMonth()->toDateString();
 
         return Auth::user()->transactions()
+            ->excludingSplitParents()
             ->whereNotNull('category')
             ->whereDate('booked_on', '>=', $start)
             ->whereDate('booked_on', '<=', $end)
