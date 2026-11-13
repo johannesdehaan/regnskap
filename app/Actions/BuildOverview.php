@@ -22,6 +22,7 @@ class BuildOverview
         $end = $date->copy()->endOfMonth()->toDateString();
 
         $spend = $user->transactions()
+            ->excludingSplitParents()
             ->whereNotNull('category')
             ->whereDate('booked_on', '>=', $start)
             ->whereDate('booked_on', '<=', $end)

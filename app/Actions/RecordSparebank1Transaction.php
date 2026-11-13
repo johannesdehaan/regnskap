@@ -50,7 +50,18 @@ class RecordSparebank1Transaction
         ParsedBankTransaction $parsed,
         array $ownAccountNumbers,
     ): string {
-        if ($existing->booking_status === BookingStatus::Booked && $parsed->bookingStatus === BookingStatus::Booked && $existing->external_id === $parsed->externalId) {
+        $amountChanged = $this->toCents((string) $existing->amount) !== $this->toCents($parsed->absoluteAmount);
+        $alreadyBooked = $existing->booking_status === BookingStatus::Booked
+            && $parsed->bookingStatus === BookingStatus::Booked
+            && $existing->external_id === $parsed->externalId;
+
+        if ($alreadyBooked && ! $amountChanged) {
+            return 'skipped';
+        }
+
+        $hasSplit = $existing->children()->exists();
+
+        if ($alreadyBooked && ! $hasSplit) {
             return 'skipped';
         }
 
@@ -85,6 +96,10 @@ class RecordSparebank1Transaction
             ]);
         }
 
+        if ($hasSplit && $amountChanged) {
+            $existing->needs_review = true;
+        }
+
         if (! $existing->isDirty()) {
             return 'skipped';
         }
@@ -101,6 +116,7 @@ class RecordSparebank1Transaction
     private function findExisting(User $user, BankAccount $account, ParsedBankTransaction $parsed): ?Transaction
     {
         $match = $user->transactions()
+            ->whereNull('parent_id')
             ->where(function ($query) use ($parsed): void {
                 $query->where('external_id', $parsed->externalId)
                     ->orWhereIn('dedupe_key', $parsed->lookupKeys);
@@ -112,6 +128,7 @@ class RecordSparebank1Transaction
         }
 
         $candidates = $user->transactions()
+            ->whereNull('parent_id')
             ->where('bank_account_id', $account->id)
             ->where('booking_status', BookingStatus::Pending->value)
             ->where('amount', $parsed->absoluteAmount)
@@ -163,6 +180,11 @@ class RecordSparebank1Transaction
             'exclude_from_budget' => $exclude,
             'payment_method' => $account->payment_method,
         ];
+    }
+
+    private function toCents(string $amount): int
+    {
+        return (int) round(((float) $amount) * 100);
     }
 
     private function similar(string $left, string $right): bool

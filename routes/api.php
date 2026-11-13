@@ -21,6 +21,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/transactions', [TransactionController::class, 'index']);
     Route::post('/transactions', [TransactionController::class, 'store']);
     Route::post('/transactions/import', TransactionImportController::class);
+    Route::post('/transactions/{transaction}/split', [TransactionController::class, 'split']);
+    Route::delete('/transactions/{transaction}/split', [TransactionController::class, 'destroySplit']);
     Route::patch('/transactions/{transaction}', [TransactionController::class, 'update']);
 
     Route::get('/budget-lines', [BudgetLineController::class, 'index']);

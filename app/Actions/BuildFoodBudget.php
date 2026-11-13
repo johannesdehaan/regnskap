@@ -2,6 +2,8 @@
 
 namespace App\Actions;
 
+use App\Enums\Category;
+use App\Enums\Subcategory;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\NonFoodMovement;
@@ -34,9 +36,9 @@ class BuildFoodBudget
         $start = $today->subDays($window - 1);
 
         $transactions = $user->transactions()
+            ->excludingSplitParents()
             ->whereDate('booked_on', '>=', $start->toDateString())
             ->whereDate('booked_on', '<=', $today->toDateString())
-            ->whereDoesntHave('children')
             ->get();
 
         /** @var Collection<string, Collection<int, Transaction>> $byDate */
@@ -105,13 +107,7 @@ class BuildFoodBudget
 
     private function counts(User $user, Transaction $transaction): bool
     {
-        if ($transaction->exclude_from_budget || $transaction->needs_review) {
-            return false;
-        }
-
-        $category = $transaction->category;
-
-        if ($category === null || ! $category->countsAsFood()) {
+        if ($transaction->exclude_from_budget || $transaction->needs_review || ! $this->isFood($transaction)) {
             return false;
         }
 
@@ -124,7 +120,22 @@ class BuildFoodBudget
             return false;
         }
 
+        if ($transaction->subcategory instanceof Subcategory && ! $transaction->subcategory->countsAsFood()) {
+            return false;
+        }
+
         return ! $this->movements->isIgnored($user, $transaction->payee, $transaction->note);
+    }
+
+    private function isFood(Transaction $transaction): bool
+    {
+        if ($transaction->subcategory instanceof Subcategory && ! $transaction->subcategory->countsAsFood()) {
+            return false;
+        }
+
+        $category = $transaction->category;
+
+        return $category instanceof Category && $category->countsAsFood();
     }
 
     private function cents(string $amount): int

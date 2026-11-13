@@ -3,10 +3,12 @@
 use App\Actions\ClassifyFoodPurchase;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
+use App\Enums\Subcategory;
 use App\Models\Transaction;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -19,6 +21,8 @@ new #[Title('Ny transaksjon')] class extends Component
     public string $payee = '';
 
     public ?string $category = null;
+
+    public ?string $subcategory = null;
 
     public ?string $payment_method = null;
 
@@ -41,6 +45,7 @@ new #[Title('Ny transaksjon')] class extends Component
             'amount' => ['required', 'numeric', 'gt:0'],
             'payee' => ['required', 'string', 'max:255'],
             'category' => ['nullable', Rule::enum(Category::class)],
+            'subcategory' => ['nullable', Rule::enum(Subcategory::class)],
             'payment_method' => ['nullable', Rule::enum(PaymentMethod::class)],
             'note' => ['nullable', 'string'],
         ]);
@@ -49,9 +54,19 @@ new #[Title('Ny transaksjon')] class extends Component
         $validated['category'] = $validated['category'] !== null && $validated['category'] !== ''
             ? Category::from($validated['category'])
             : null;
+        $validated['subcategory'] = $validated['subcategory'] !== null && $validated['subcategory'] !== ''
+            ? Subcategory::from($validated['subcategory'])
+            : null;
         $validated['payment_method'] = $validated['payment_method'] !== null && $validated['payment_method'] !== ''
             ? PaymentMethod::from($validated['payment_method'])
             : null;
+
+        if ($validated['subcategory'] instanceof Subcategory
+            && (! $validated['category'] instanceof Category || $validated['subcategory']->category() !== $validated['category'])) {
+            throw ValidationException::withMessages([
+                'subcategory' => 'Underkategorien hører ikke til kategorien.',
+            ]);
+        }
         $validated['exclude_from_budget'] = $this->exclude_from_budget;
 
         $explicitCategory = $validated['category'] instanceof Category;
@@ -85,6 +100,12 @@ new #[Title('Ny transaksjon')] class extends Component
             <option value="">{{ __('Ukategorisert') }}</option>
             @foreach (\App\Enums\Category::cases() as $category)
                 <option value="{{ $category->value }}">{{ $category->value }}</option>
+            @endforeach
+        </flux:select>
+        <flux:select wire:model="subcategory" :label="__('Underkategori')">
+            <option value="">{{ __('Ingen') }}</option>
+            @foreach (\App\Enums\Subcategory::cases() as $subcategory)
+                <option value="{{ $subcategory->value }}">{{ $subcategory->value }}</option>
             @endforeach
         </flux:select>
         <flux:select wire:model="payment_method" :label="__('Betalingsmåte')">
