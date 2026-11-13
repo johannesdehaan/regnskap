@@ -110,10 +110,6 @@ class Sparebank1Controller extends Controller
         $rows = [];
 
         foreach ($connection->accounts()->orderBy('name')->get() as $account) {
-            if (! $account instanceof BankAccount) {
-                continue;
-            }
-
             $rows[] = $this->accountPayload($account);
         }
 
