@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\MonthlyFigureController;
 use App\Http\Controllers\Api\OverviewController;
 use App\Http\Controllers\Api\RecurringCostController;
+use App\Http\Controllers\Api\Sparebank1Controller;
 use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\TransactionImportController;
 use Illuminate\Support\Facades\Route;
@@ -51,6 +52,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/accounts', [AccountController::class, 'store']);
     Route::patch('/accounts/{account}', [AccountController::class, 'update']);
     Route::delete('/accounts/{account}', [AccountController::class, 'destroy']);
+
+    Route::get('/sparebank1', [Sparebank1Controller::class, 'show']);
+    Route::post('/sparebank1/sync', [Sparebank1Controller::class, 'sync']);
+    Route::patch('/sparebank1/accounts/{bankAccount}', [Sparebank1Controller::class, 'updateAccount']);
 
     Route::get('/overview', OverviewController::class);
 

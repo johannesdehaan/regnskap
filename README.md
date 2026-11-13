@@ -36,6 +36,8 @@ Innstillinger → **Bank** (`/settings/bank`) kobler til SpareBank 1 med OAuth o
 
 Innstillinger → **Agent**: opprett en personlig tilgangsnøkkel (standardnavn «Personlig regnskapsfører»). Nøkkelen vises bare én gang. Bruk den som `Authorization: Bearer …` mot `/api` (for eksempel `GET /api/me`). Ikke commit nøkkelen.
 
+`GET /api/sparebank1` viser tilkoblingsstatus og kontoer. `POST /api/sparebank1/sync` henter transaksjoner. `PATCH /api/sparebank1/accounts/{id}` skrur synk av eller på og setter betalingsmåte.
+
 ## Utvikling
 
 ```bash
