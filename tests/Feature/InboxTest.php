@@ -126,6 +126,44 @@ test('csv import creates uncategorized transactions and skips duplicates', funct
     ]);
 });
 
+test('inbox category buttons render labels instead of blade directives', function () {
+    $user = User::factory()->create();
+
+    Transaction::factory()->for($user)->create([
+        'payee' => 'Rema 1000 Test',
+        'category' => null,
+        'needs_review' => true,
+    ]);
+
+    CategoryRule::factory()->create([
+        'payee' => 'Rema',
+        'category' => Category::Dagligvarer,
+        'confidence' => Confidence::Opplagt,
+    ]);
+
+    $this->actingAs($user);
+
+    $response = $this->get(route('inbox'));
+
+    $response->assertOk();
+
+    $content = $response->getContent();
+
+    expect($content)->not->toContain('@if')
+        ->and($content)->not->toContain('@endif')
+        ->and(substr_count($content, 'data-suggested="1"'))->toBe(1);
+
+    $response->assertSee('Forslag');
+
+    foreach (Category::cases() as $category) {
+        $response->assertSee($category->value, false);
+        expect(
+            str_contains($content, "assign('{$category->value}')")
+            || str_contains($content, "assign(&#039;{$category->value}&#039;)")
+        )->toBeTrue();
+    }
+});
+
 test('a suggestion is shown for opplagt rules but not for uklart', function () {
     $user = User::factory()->create();
     Transaction::factory()->for($user)->create([
