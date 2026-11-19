@@ -306,3 +306,202 @@ test('additions belong to one user and are removed with the user', function () {
 
     expect(FoodBudgetAddition::query()->count())->toBe(0);
 });
+
+test('guests cannot use the additions api', function () {
+    $addition = budgetAddition(User::factory()->create(), '2026-03-08', '2026-03-12');
+
+    $this->getJson('/api/food-budget/additions')->assertUnauthorized();
+    $this->postJson('/api/food-budget/additions', [
+        'label' => 'Gjester på besøk',
+        'starts_on' => '2026-03-08',
+        'ends_on' => '2026-03-12',
+        'amount_per_day' => '40.00',
+    ])->assertUnauthorized();
+    $this->patchJson('/api/food-budget/additions/'.$addition->id, ['label' => 'Kapret'])->assertUnauthorized();
+    $this->deleteJson('/api/food-budget/additions/'.$addition->id)->assertUnauthorized();
+
+    expect($addition->fresh()->label)->toBe('Gjester på besøk');
+});
+
+test('the api creates lists updates and deletes additions and the budget follows', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-09-03 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $token = $user->createToken('Personlig regnskapsfører')->plainTextToken;
+    groceries($user, '300.00', '2026-09-03');
+
+    $id = $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [
+            'label' => 'Gjester på besøk',
+            'starts_on' => '2026-09-01',
+            'ends_on' => '2026-09-08',
+            'amount_per_day' => 40,
+        ])
+        ->assertCreated()
+        ->assertJsonPath('label', 'Gjester på besøk')
+        ->assertJsonPath('starts_on', '2026-09-01')
+        ->assertJsonPath('ends_on', '2026-09-08')
+        ->assertJsonPath('amount_per_day', '40.00')
+        ->json('id');
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget/additions')
+        ->assertOk()
+        ->assertJsonCount(1)
+        ->assertJsonPath('0.id', $id)
+        ->assertJsonPath('0.starts_on', '2026-09-01')
+        ->assertJsonPath('0.amount_per_day', '40.00');
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget')
+        ->assertOk()
+        ->assertJsonPath('amount', '1400.00')
+        ->assertJsonPath('additions_total', '120.00')
+        ->assertJsonPath('effective_amount', '1520.00')
+        ->assertJsonPath('spent', '300.00')
+        ->assertJsonPath('remaining_today', '1220.00')
+        ->assertJsonPath('over_limit', false)
+        ->assertJsonCount(1, 'additions')
+        ->assertJsonPath('additions.0.id', $id)
+        ->assertJsonPath('additions.0.label', 'Gjester på besøk')
+        ->assertJsonPath('additions.0.starts_on', '2026-09-01')
+        ->assertJsonPath('additions.0.ends_on', '2026-09-08')
+        ->assertJsonPath('additions.0.amount_per_day', '40.00')
+        ->assertJsonPath('additions.0.days_in_window', 3)
+        ->assertJsonPath('additions.0.amount_in_window', '120.00')
+        ->assertJsonPath('days.6.addition', '40.00')
+        ->assertJsonPath('rolloff.0.effective_amount', '1560.00');
+
+    $this->withToken($token)
+        ->patchJson('/api/food-budget/additions/'.$id, [
+            'ends_on' => '2026-09-02',
+            'amount_per_day' => '55.5',
+        ])
+        ->assertOk()
+        ->assertJsonPath('label', 'Gjester på besøk')
+        ->assertJsonPath('starts_on', '2026-09-01')
+        ->assertJsonPath('ends_on', '2026-09-02')
+        ->assertJsonPath('amount_per_day', '55.50');
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget')
+        ->assertOk()
+        ->assertJsonPath('effective_amount', '1511.00')
+        ->assertJsonPath('additions.0.days_in_window', 2);
+
+    $this->withToken($token)
+        ->patchJson('/api/food-budget', ['amount' => 1000])
+        ->assertOk()
+        ->assertJsonPath('amount', '1000.00')
+        ->assertJsonPath('effective_amount', '1111.00');
+
+    $this->withToken($token)
+        ->deleteJson('/api/food-budget/additions/'.$id)
+        ->assertNoContent();
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget/additions')
+        ->assertOk()
+        ->assertJsonCount(0);
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget')
+        ->assertOk()
+        ->assertJsonPath('amount', '1000.00')
+        ->assertJsonPath('additions_total', '0.00')
+        ->assertJsonPath('effective_amount', '1000.00')
+        ->assertJsonPath('additions', []);
+
+    expect($user->fresh()->food_budget_amount)->toBe('1000.00');
+});
+
+test('the api rejects additions with bad dates or amounts', function () {
+    $user = User::factory()->create();
+    $token = $user->createToken('test')->plainTextToken;
+    $valid = [
+        'label' => 'Gjester på besøk',
+        'starts_on' => '2026-09-01',
+        'ends_on' => '2026-09-08',
+        'amount_per_day' => '40.00',
+    ];
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['label', 'starts_on', 'ends_on', 'amount_per_day']);
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'ends_on' => '2026-08-31'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['ends_on']);
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'starts_on' => '2026-02-30'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['starts_on']);
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'ends_on' => '08.09.2026'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['ends_on']);
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'amount_per_day' => 0])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['amount_per_day']);
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'amount_per_day' => -40])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['amount_per_day']);
+
+    expect($user->foodBudgetAdditions()->count())->toBe(0);
+
+    $addition = budgetAddition($user, '2026-09-01', '2026-09-08');
+
+    $this->withToken($token)
+        ->patchJson('/api/food-budget/additions/'.$addition->id, ['ends_on' => '2026-08-31'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['ends_on']);
+
+    $this->withToken($token)
+        ->patchJson('/api/food-budget/additions/'.$addition->id, ['starts_on' => '2026-09-09'])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors(['ends_on']);
+
+    expect($addition->fresh()->starts_on->toDateString())->toBe('2026-09-01')
+        ->and($addition->fresh()->ends_on->toDateString())->toBe('2026-09-08');
+
+    $this->withToken($token)
+        ->postJson('/api/food-budget/additions', [...$valid, 'ends_on' => '2026-09-01'])
+        ->assertCreated()
+        ->assertJsonPath('starts_on', '2026-09-01')
+        ->assertJsonPath('ends_on', '2026-09-01');
+});
+
+test('a token cannot see or change another users addition', function () {
+    $user = User::factory()->create();
+    $other = User::factory()->create();
+    $token = $user->createToken('test')->plainTextToken;
+
+    budgetAddition($user, '2026-09-01', '2026-09-08', '40.00', 'Mitt tillegg');
+    $theirs = budgetAddition($other, '2026-09-01', '2026-09-08', '40.00', 'Fremmed tillegg');
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget/additions')
+        ->assertOk()
+        ->assertJsonCount(1)
+        ->assertJsonFragment(['label' => 'Mitt tillegg'])
+        ->assertJsonMissing(['label' => 'Fremmed tillegg']);
+
+    $this->withToken($token)
+        ->patchJson('/api/food-budget/additions/'.$theirs->id, ['label' => 'Kapret'])
+        ->assertForbidden();
+
+    $this->withToken($token)
+        ->deleteJson('/api/food-budget/additions/'.$theirs->id)
+        ->assertForbidden();
+
+    expect($theirs->fresh())->not->toBeNull()
+        ->and($theirs->fresh()->label)->toBe('Fremmed tillegg');
+});
