@@ -6,6 +6,7 @@ use App\Models\FoodBudgetAddition;
 use App\Models\Transaction;
 use App\Models\User;
 use Carbon\CarbonImmutable;
+use Livewire\Livewire;
 
 function budgetAddition(User $user, string $from, string $to, string $perDay = '40.00', string $label = 'Gjester på besøk'): FoodBudgetAddition
 {
@@ -500,6 +501,150 @@ test('a token cannot see or change another users addition', function () {
 
     $this->withToken($token)
         ->deleteJson('/api/food-budget/additions/'.$theirs->id)
+        ->assertForbidden();
+
+    expect($theirs->fresh())->not->toBeNull()
+        ->and($theirs->fresh()->label)->toBe('Fremmed tillegg');
+});
+
+test('the food budget page and the inbox show the effective limit', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-08', '2026-03-15');
+    budgetAddition($user, '2026-03-20', '2026-03-21', '30.00', 'Påskelunsj');
+    budgetAddition($user, '2026-02-01', '2026-02-02', '30.00', 'Vinterferie');
+    groceries($user, '200.00', '2026-03-10');
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::mat.index')
+        ->assertSee('Med 120 kr i tillegg er grensen 1 520 kr i dag.')
+        ->assertSee('1 400 kr + 120 kr i tillegg')
+        ->assertSee('1 320')
+        ->assertSee('Under grensen')
+        ->assertSee('Gjester på besøk')
+        ->assertSee('+ 40 kr per dag')
+        ->assertSee('8. mar – 15. mar')
+        ->assertSee('120 kr i dagens grense')
+        ->assertSee('3 dager i vinduet')
+        ->assertSee('+ 40 kr i tillegg')
+        ->assertSee('Grensen er da 1 560 kr.')
+        ->assertSeeInOrder(['Påskelunsj', 'Ikke startet', 'Gjester på besøk', 'Vinterferie', 'Avsluttet']);
+
+    Livewire::test('pages::inbox')
+        ->assertSee('1 320')
+        ->assertSee('1 400 kr + 120 kr i tillegg');
+});
+
+test('the food budget page hides the addition texts when there are none', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $this->actingAs(User::factory()->create());
+
+    Livewire::test('pages::mat.index')
+        ->assertSee('1 400 kr per 7 dager')
+        ->assertSee('Ingen tillegg ennå.')
+        ->assertDontSee('i tillegg')
+        ->assertDontSee('Grensen er da');
+});
+
+test('a user can add edit and delete an addition on the food budget page', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $page = Livewire::test('pages::mat.index')
+        ->set('additionLabel', 'Helgebesøk')
+        ->set('additionStartsOn', '2026-03-09')
+        ->set('additionEndsOn', '2026-03-12')
+        ->set('additionAmountPerDay', '40')
+        ->call('saveAddition')
+        ->assertHasNoErrors()
+        ->assertSet('additionLabel', '')
+        ->assertSet('additionStartsOn', '')
+        ->assertSee('Helgebesøk')
+        ->assertSee('1 480');
+
+    $addition = $user->foodBudgetAdditions()->sole();
+
+    expect($addition->label)->toBe('Helgebesøk')
+        ->and($addition->starts_on->toDateString())->toBe('2026-03-09')
+        ->and($addition->ends_on->toDateString())->toBe('2026-03-12')
+        ->and($addition->amount_per_day)->toBe('40.00');
+
+    $page->call('editAddition', $addition->id)
+        ->assertSet('editingAdditionId', $addition->id)
+        ->assertSet('additionLabel', 'Helgebesøk')
+        ->assertSet('additionStartsOn', '2026-03-09')
+        ->assertSet('additionEndsOn', '2026-03-12')
+        ->assertSet('additionAmountPerDay', '40.00')
+        ->set('additionStartsOn', '2026-03-08')
+        ->set('additionAmountPerDay', '50')
+        ->call('saveAddition')
+        ->assertHasNoErrors()
+        ->assertSet('editingAdditionId', null)
+        ->assertSee('1 550');
+
+    expect($user->foodBudgetAdditions()->count())->toBe(1)
+        ->and($addition->fresh()->starts_on->toDateString())->toBe('2026-03-08')
+        ->and($addition->fresh()->amount_per_day)->toBe('50.00')
+        ->and($user->fresh()->food_budget_amount)->toBe('1400.00');
+
+    $page->call('deleteAddition', $addition->id)
+        ->assertSee('Ingen tillegg ennå.')
+        ->assertDontSee('Helgebesøk');
+
+    expect($user->foodBudgetAdditions()->count())->toBe(0);
+});
+
+test('the food budget page rejects an end date before the start date', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    Livewire::test('pages::mat.index')
+        ->set('additionLabel', 'Gjester på besøk')
+        ->set('additionStartsOn', '2026-03-09')
+        ->set('additionEndsOn', '2026-03-08')
+        ->set('additionAmountPerDay', '40')
+        ->call('saveAddition')
+        ->assertHasErrors(['additionEndsOn'])
+        ->assertSee('Sluttdatoen kan ikke være før startdatoen.');
+
+    Livewire::test('pages::mat.index')
+        ->set('additionLabel', 'Gjester på besøk')
+        ->set('additionStartsOn', '2026-03-09')
+        ->set('additionEndsOn', '2026-03-09')
+        ->set('additionAmountPerDay', '0')
+        ->call('saveAddition')
+        ->assertHasErrors(['additionAmountPerDay']);
+
+    expect($user->foodBudgetAdditions()->count())->toBe(0);
+});
+
+test('a user cannot edit or delete another users addition on the food budget page', function () {
+    $user = User::factory()->create();
+    $theirs = budgetAddition(User::factory()->create(), '2026-03-08', '2026-03-12', '40.00', 'Fremmed tillegg');
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::mat.index')
+        ->assertDontSee('Fremmed tillegg')
+        ->call('editAddition', $theirs->id)
+        ->assertForbidden();
+
+    Livewire::test('pages::mat.index')
+        ->call('deleteAddition', $theirs->id)
+        ->assertForbidden();
+
+    Livewire::test('pages::mat.index')
+        ->set('editingAdditionId', $theirs->id)
+        ->set('additionLabel', 'Kapret')
+        ->set('additionStartsOn', '2026-03-09')
+        ->set('additionEndsOn', '2026-03-09')
+        ->set('additionAmountPerDay', '1')
+        ->call('saveAddition')
         ->assertForbidden();
 
     expect($theirs->fresh())->not->toBeNull()
