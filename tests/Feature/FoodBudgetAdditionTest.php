@@ -1,0 +1,308 @@
+<?php
+
+use App\Actions\BuildFoodBudget;
+use App\Enums\Category;
+use App\Models\FoodBudgetAddition;
+use App\Models\Transaction;
+use App\Models\User;
+use Carbon\CarbonImmutable;
+
+function budgetAddition(User $user, string $from, string $to, string $perDay = '40.00', string $label = 'Gjester på besøk'): FoodBudgetAddition
+{
+    return FoodBudgetAddition::factory()->for($user)->create([
+        'label' => $label,
+        'starts_on' => $from,
+        'ends_on' => $to,
+        'amount_per_day' => $perDay,
+    ]);
+}
+
+function groceries(User $user, string $amount, string $date): Transaction
+{
+    return Transaction::factory()->for($user)->create([
+        'payee' => 'Testbutikk',
+        'note' => null,
+        'amount' => $amount,
+        'booked_on' => $date,
+        'category' => Category::Dagligvarer,
+        'needs_review' => false,
+        'exclude_from_budget' => false,
+        'payment_method' => null,
+    ]);
+}
+
+test('without additions the effective amount is the base amount', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    groceries($user, '200.00', '2026-03-10');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['amount'])->toBe('1400.00')
+        ->and($status['additions_total'])->toBe('0.00')
+        ->and($status['effective_amount'])->toBe('1400.00')
+        ->and($status['additions'])->toBe([])
+        ->and($status['remaining_today'])->toBe('1200.00')
+        ->and(array_column($status['days'], 'addition'))->toBe(array_fill(0, 7, '0.00'))
+        ->and(array_column($status['rolloff'], 'effective_amount'))->toBe(array_fill(0, 7, '1400.00'));
+});
+
+test('an addition that started inside the window counts only the days so far', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $addition = budgetAddition($user, '2026-03-08', '2026-03-15');
+    groceries($user, '200.00', '2026-03-09');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['amount'])->toBe('1400.00')
+        ->and($status['additions_total'])->toBe('120.00')
+        ->and($status['effective_amount'])->toBe('1520.00')
+        ->and($status['spent'])->toBe('200.00')
+        ->and($status['remaining_today'])->toBe('1320.00')
+        ->and($status['over_limit'])->toBeFalse()
+        ->and($status['additions'])->toBe([[
+            'id' => $addition->id,
+            'label' => 'Gjester på besøk',
+            'starts_on' => '2026-03-08',
+            'ends_on' => '2026-03-15',
+            'amount_per_day' => '40.00',
+            'days_in_window' => 3,
+            'amount_in_window' => '120.00',
+        ]])
+        ->and(array_column($status['days'], 'addition', 'date'))->toBe([
+            '2026-03-04' => '0.00',
+            '2026-03-05' => '0.00',
+            '2026-03-06' => '0.00',
+            '2026-03-07' => '0.00',
+            '2026-03-08' => '40.00',
+            '2026-03-09' => '40.00',
+            '2026-03-10' => '40.00',
+        ]);
+});
+
+test('an addition that started before the window counts only the days still inside', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-01', '2026-03-05');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['additions_total'])->toBe('80.00')
+        ->and($status['effective_amount'])->toBe('1480.00')
+        ->and($status['remaining_today'])->toBe('1480.00')
+        ->and($status['additions'][0]['days_in_window'])->toBe(2)
+        ->and($status['additions'][0]['amount_in_window'])->toBe('80.00')
+        ->and($status['days'][0]['addition'])->toBe('40.00')
+        ->and($status['days'][1]['addition'])->toBe('40.00')
+        ->and($status['days'][2]['addition'])->toBe('0.00');
+});
+
+test('an addition longer than the window counts every window day once', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-02-01', '2026-04-30');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['additions_total'])->toBe('280.00')
+        ->and($status['effective_amount'])->toBe('1680.00')
+        ->and($status['additions'][0]['days_in_window'])->toBe(7)
+        ->and(array_column($status['rolloff'], 'effective_amount'))->toBe(array_fill(0, 7, '1680.00'));
+});
+
+test('overlapping additions add up on the days they share', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $long = budgetAddition($user, '2026-03-08', '2026-03-12', '40.00', 'Gjester på besøk');
+    $short = budgetAddition($user, '2026-03-10', '2026-03-10', '25.50', 'Bursdagsmiddag');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['additions_total'])->toBe('145.50')
+        ->and($status['effective_amount'])->toBe('1545.50')
+        ->and($status['remaining_today'])->toBe('1545.50')
+        ->and($status['days'][4]['addition'])->toBe('40.00')
+        ->and($status['days'][5]['addition'])->toBe('40.00')
+        ->and($status['days'][6]['addition'])->toBe('65.50')
+        ->and(array_column($status['additions'], 'id'))->toBe([$long->id, $short->id])
+        ->and(array_column($status['additions'], 'days_in_window'))->toBe([3, 1])
+        ->and(array_column($status['additions'], 'amount_in_window'))->toBe(['120.00', '25.50']);
+});
+
+test('an ended addition counts until its last day leaves the window', function () {
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-01', '2026-03-04');
+
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 23:59:00', 'Europe/Oslo'));
+    $lastDay = app(BuildFoodBudget::class)($user);
+
+    $this->travelTo(CarbonImmutable::parse('2026-03-11 00:01:00', 'Europe/Oslo'));
+    $dayAfter = app(BuildFoodBudget::class)($user);
+
+    expect($lastDay['days'][0]['date'])->toBe('2026-03-04')
+        ->and($lastDay['additions_total'])->toBe('40.00')
+        ->and($lastDay['effective_amount'])->toBe('1440.00')
+        ->and($lastDay['additions'][0]['days_in_window'])->toBe(1)
+        ->and($lastDay['rolloff'][0]['effective_amount'])->toBe('1400.00')
+        ->and($dayAfter['days'][0]['date'])->toBe('2026-03-05')
+        ->and($dayAfter['additions_total'])->toBe('0.00')
+        ->and($dayAfter['effective_amount'])->toBe('1400.00')
+        ->and($dayAfter['remaining_today'])->toBe('1400.00')
+        ->and($dayAfter['additions'])->toBe([]);
+});
+
+test('a future addition does not count until its first day', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-11', '2026-03-12');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['additions_total'])->toBe('0.00')
+        ->and($status['effective_amount'])->toBe('1400.00')
+        ->and($status['additions'])->toBe([])
+        ->and($status['rolloff'][0]['date'])->toBe('2026-03-11')
+        ->and($status['rolloff'][0]['additions_total'])->toBe('40.00')
+        ->and($status['rolloff'][0]['effective_amount'])->toBe('1440.00')
+        ->and($status['rolloff'][0]['remaining_if_no_new_spending'])->toBe('1440.00')
+        ->and($status['rolloff'][1]['effective_amount'])->toBe('1480.00')
+        ->and($status['rolloff'][6]['date'])->toBe('2026-03-17')
+        ->and($status['rolloff'][6]['effective_amount'])->toBe('1480.00');
+});
+
+test('roll-off lowers the limit when an addition day falls out with its spending', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-04', '2026-03-05');
+    groceries($user, '200.00', '2026-03-04');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['effective_amount'])->toBe('1480.00')
+        ->and($status['remaining_today'])->toBe('1280.00')
+        ->and($status['rolloff'][0])->toBe([
+            'date' => '2026-03-11',
+            'drops' => '2026-03-04',
+            'frees' => '200.00',
+            'additions_total' => '40.00',
+            'effective_amount' => '1440.00',
+            'remaining_if_no_new_spending' => '1440.00',
+        ])
+        ->and($status['rolloff'][1])->toBe([
+            'date' => '2026-03-12',
+            'drops' => '2026-03-05',
+            'frees' => '0.00',
+            'additions_total' => '0.00',
+            'effective_amount' => '1400.00',
+            'remaining_if_no_new_spending' => '1400.00',
+        ]);
+});
+
+test('the remainder and over_limit use the effective amount', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-04-02 08:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    groceries($user, '1450.00', '2026-04-02');
+
+    $without = app(BuildFoodBudget::class)($user);
+
+    budgetAddition($user, '2026-04-01', '2026-04-02');
+    $with = app(BuildFoodBudget::class)($user);
+
+    groceries($user, '50.00', '2026-04-02');
+    $overAgain = app(BuildFoodBudget::class)($user);
+
+    expect($without['remaining_today'])->toBe('-50.00')
+        ->and($without['over_limit'])->toBeTrue()
+        ->and($with['amount'])->toBe('1400.00')
+        ->and($with['effective_amount'])->toBe('1480.00')
+        ->and($with['remaining_today'])->toBe('30.00')
+        ->and($with['over_limit'])->toBeFalse()
+        ->and($overAgain['remaining_today'])->toBe('-20.00')
+        ->and($overAgain['over_limit'])->toBeTrue();
+});
+
+test('addition days follow Europe/Oslo around midnight utc', function () {
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-01-16', '2026-01-20');
+
+    $this->travelTo(CarbonImmutable::parse('2026-01-15 22:30:00', 'UTC'));
+    $before = app(BuildFoodBudget::class)($user);
+
+    $this->travelTo(CarbonImmutable::parse('2026-01-15 23:30:00', 'UTC'));
+    $after = app(BuildFoodBudget::class)($user);
+
+    expect($before['today'])->toBe('2026-01-15')
+        ->and($before['effective_amount'])->toBe('1400.00')
+        ->and($before['rolloff'][0]['effective_amount'])->toBe('1440.00')
+        ->and($after['today'])->toBe('2026-01-16')
+        ->and($after['timezone'])->toBe('Europe/Oslo')
+        ->and($after['effective_amount'])->toBe('1440.00')
+        ->and($after['additions'][0]['days_in_window'])->toBe(1);
+});
+
+test('the clock change does not skip or repeat an addition day', function () {
+    $user = User::factory()->create();
+    budgetAddition($user, '2026-03-28', '2026-03-30');
+    budgetAddition($user, '2026-10-24', '2026-10-26');
+
+    $this->travelTo(CarbonImmutable::parse('2026-03-31 12:00:00', 'Europe/Oslo'));
+    $spring = app(BuildFoodBudget::class)($user);
+
+    $this->travelTo(CarbonImmutable::parse('2026-10-27 12:00:00', 'Europe/Oslo'));
+    $autumn = app(BuildFoodBudget::class)($user);
+
+    expect($spring['additions_total'])->toBe('120.00')
+        ->and($spring['additions'][0]['days_in_window'])->toBe(3)
+        ->and(array_column($spring['days'], 'date'))->toBe([
+            '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29', '2026-03-30', '2026-03-31',
+        ])
+        ->and($autumn['additions_total'])->toBe('120.00')
+        ->and($autumn['additions'][0]['days_in_window'])->toBe(3)
+        ->and(array_column($autumn['days'], 'date'))->toBe([
+            '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25', '2026-10-26', '2026-10-27',
+        ]);
+});
+
+test('the window length decides how many addition days count', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create(['food_budget_amount' => '600.00', 'food_budget_window_days' => 3]);
+    budgetAddition($user, '2026-03-01', '2026-03-09');
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['window_days'])->toBe(3)
+        ->and($status['amount'])->toBe('600.00')
+        ->and($status['additions_total'])->toBe('80.00')
+        ->and($status['effective_amount'])->toBe('680.00')
+        ->and($status['additions'][0]['days_in_window'])->toBe(2)
+        ->and($status['rolloff'][2]['effective_amount'])->toBe('600.00');
+});
+
+test('additions belong to one user and are removed with the user', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-03-10 12:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $other = User::factory()->create();
+    $theirs = budgetAddition($other, '2026-03-08', '2026-03-12');
+
+    expect(app(BuildFoodBudget::class)($user)['effective_amount'])->toBe('1400.00')
+        ->and(app(BuildFoodBudget::class)($other)['effective_amount'])->toBe('1520.00')
+        ->and($user->can('view', $theirs))->toBeFalse()
+        ->and($user->can('update', $theirs))->toBeFalse()
+        ->and($user->can('delete', $theirs))->toBeFalse()
+        ->and($other->can('update', $theirs))->toBeTrue();
+
+    $other->delete();
+
+    expect(FoodBudgetAddition::query()->count())->toBe(0);
+});
