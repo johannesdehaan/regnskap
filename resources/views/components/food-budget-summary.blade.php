@@ -40,7 +40,15 @@
         </div>
         <div>
             <p class="text-xs opacity-80">{{ __('Grense') }}</p>
-            <p class="font-semibold tabular-nums">{{ $kroner($status['amount']) }} kr</p>
+            <p class="font-semibold tabular-nums" data-test="food-limit">{{ $kroner($status['effective_amount']) }} kr</p>
+            @if ($status['additions'] !== [])
+                <p class="text-xs tabular-nums opacity-80" data-test="food-limit-breakdown">
+                    {{ __(':base kr + :extra kr i tillegg', [
+                        'base' => $kroner($status['amount']),
+                        'extra' => $kroner($status['additions_total']),
+                    ]) }}
+                </p>
+            @endif
         </div>
     </div>
 

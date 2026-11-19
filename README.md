@@ -38,6 +38,21 @@ Innstillinger → **Agent**: opprett en personlig tilgangsnøkkel (standardnavn 
 
 `GET /api/sparebank1` viser tilkoblingsstatus og kontoer. `POST /api/sparebank1/sync` henter transaksjoner. `PATCH /api/sparebank1/accounts/{id}` skrur synk av eller på og setter betalingsmåte.
 
+### Matbudsjett og tillegg
+
+`GET /api/food-budget` viser det rullerende matbudsjettet. `amount` er grunnbeløpet. `effective_amount` er grunnbeløpet pluss `additions_total`, og det er dette `remaining_today` og `over_limit` regnes mot. `additions` viser tilleggene som har dager i dagens vindu.
+
+Et tillegg gir `amount_per_day` kroner ekstra for hver dag fra og med `starts_on` til og med `ends_on`. En dag teller bare mens den er inne i vinduet, så tillegget faller ut dag for dag, på samme måte som utgiftene. Datoene er kalenderdager i Europe/Oslo.
+
+| Metode | Sti | Gjør |
+| --- | --- | --- |
+| `GET` | `/api/food-budget/additions` | Lister alle tillegg, eldste startdato først. |
+| `POST` | `/api/food-budget/additions` | Oppretter et tillegg. Krever `label`, `starts_on`, `ends_on` og `amount_per_day`. |
+| `PATCH` | `/api/food-budget/additions/{id}` | Endre ett eller flere av feltene. |
+| `DELETE` | `/api/food-budget/additions/{id}` | Sletter tillegget. |
+
+Datoer skrives som `ÅÅÅÅ-MM-DD`, `ends_on` kan ikke være før `starts_on`, og `amount_per_day` må være minst 0,01.
+
 ## Utvikling
 
 ```bash

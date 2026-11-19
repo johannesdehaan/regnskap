@@ -4,6 +4,7 @@ namespace App\Actions;
 
 use App\Enums\Category;
 use App\Enums\Subcategory;
+use App\Models\FoodBudgetAddition;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Support\NonFoodMovement;
@@ -15,24 +16,31 @@ class BuildFoodBudget
     public function __construct(private NonFoodMovement $movements) {}
 
     /**
+     * The limit for a day is the base amount plus every addition day that is
+     * inside that day's window. An addition day leaves the window on the same
+     * day as the spending from that date.
+     *
      * @return array{
      *     timezone: string,
      *     today: string,
      *     amount: string,
+     *     additions_total: string,
+     *     effective_amount: string,
      *     window_days: int,
      *     spent: string,
      *     remaining_today: string,
      *     over_limit: bool,
      *     pending_review: string,
-     *     days: list<array{date: string, spent: string, pending_review: string}>,
-     *     rolloff: list<array{date: string, drops: string, frees: string, remaining_if_no_new_spending: string}>
+     *     additions: list<array{id: int, label: string, starts_on: string, ends_on: string, amount_per_day: string, days_in_window: int, amount_in_window: string}>,
+     *     days: list<array{date: string, spent: string, pending_review: string, addition: string}>,
+     *     rolloff: list<array{date: string, drops: string, frees: string, additions_total: string, effective_amount: string, remaining_if_no_new_spending: string}>
      * }
      */
     public function __invoke(User $user, ?CarbonImmutable $now = null): array
     {
         $today = ($now ?? CarbonImmutable::now('Europe/Oslo'))->timezone('Europe/Oslo')->startOfDay();
         $window = max(1, (int) ($user->food_budget_window_days ?: 7));
-        $limitCents = $this->cents((string) ($user->food_budget_amount ?: '1400.00'));
+        $baseCents = $this->cents((string) ($user->food_budget_amount ?: '1400.00'));
         $start = $today->subDays($window - 1);
 
         $transactions = $user->transactions()
@@ -46,10 +54,14 @@ class BuildFoodBudget
             fn (Transaction $transaction): string => $transaction->booked_on->toDateString(),
         );
 
+        $additions = $this->additions($user, $start, $today->addDays($window));
+
         $days = [];
         $spentCents = 0;
         $pendingCents = 0;
+        $additionsCents = 0;
         $spentByDate = [];
+        $additionByDate = [];
 
         for ($offset = 0; $offset < $window; $offset++) {
             $date = $start->addDays($offset)->toDateString();
@@ -65,44 +77,132 @@ class BuildFoodBudget
                 }
             }
 
+            $dayAddition = $this->additionOn($additions, $date);
+
             $spentByDate[$date] = $daySpent;
+            $additionByDate[$date] = $dayAddition;
             $spentCents += $daySpent;
             $pendingCents += $dayPending;
+            $additionsCents += $dayAddition;
             $days[] = [
                 'date' => $date,
                 'spent' => $this->fromCents($daySpent),
                 'pending_review' => $this->fromCents($dayPending),
+                'addition' => $this->fromCents($dayAddition),
             ];
         }
 
-        $remainingCents = $limitCents - $spentCents;
+        $effectiveCents = $baseCents + $additionsCents;
+        $remainingCents = $effectiveCents - $spentCents;
         $rolloff = [];
         $freed = 0;
+        $windowAdditions = $additionsCents;
 
         for ($step = 1; $step <= $window; $step++) {
+            $date = $today->addDays($step)->toDateString();
             $drops = $today->subDays($window - $step)->toDateString();
             $frees = $spentByDate[$drops] ?? 0;
             $freed += $frees;
+            $windowAdditions += $this->additionOn($additions, $date) - ($additionByDate[$drops] ?? 0);
             $rolloff[] = [
-                'date' => $today->addDays($step)->toDateString(),
+                'date' => $date,
                 'drops' => $drops,
                 'frees' => $this->fromCents($frees),
-                'remaining_if_no_new_spending' => $this->fromCents($remainingCents + $freed),
+                'additions_total' => $this->fromCents($windowAdditions),
+                'effective_amount' => $this->fromCents($baseCents + $windowAdditions),
+                'remaining_if_no_new_spending' => $this->fromCents($baseCents + $windowAdditions - $spentCents + $freed),
             ];
         }
 
         return [
             'timezone' => 'Europe/Oslo',
             'today' => $today->toDateString(),
-            'amount' => $this->fromCents($limitCents),
+            'amount' => $this->fromCents($baseCents),
+            'additions_total' => $this->fromCents($additionsCents),
+            'effective_amount' => $this->fromCents($effectiveCents),
             'window_days' => $window,
             'spent' => $this->fromCents($spentCents),
             'remaining_today' => $this->fromCents($remainingCents),
             'over_limit' => $remainingCents < 0,
             'pending_review' => $this->fromCents($pendingCents),
+            'additions' => $this->additionBreakdown($additions, array_keys($additionByDate)),
             'days' => $days,
             'rolloff' => $rolloff,
         ];
+    }
+
+    /**
+     * Additions that touch any day from the start of today's window to the
+     * last roll-off date. Dates are compared as Y-m-d strings, so a day is
+     * never counted twice or skipped when the clock changes.
+     *
+     * @return list<array{id: int, label: string, starts_on: string, ends_on: string, cents: int}>
+     */
+    private function additions(User $user, CarbonImmutable $from, CarbonImmutable $to): array
+    {
+        return array_values($user->foodBudgetAdditions()
+            ->whereDate('ends_on', '>=', $from->toDateString())
+            ->whereDate('starts_on', '<=', $to->toDateString())
+            ->orderBy('starts_on')
+            ->orderBy('id')
+            ->get()
+            ->map(fn (FoodBudgetAddition $addition): array => [
+                'id' => $addition->id,
+                'label' => $addition->label,
+                'starts_on' => $addition->starts_on->toDateString(),
+                'ends_on' => $addition->ends_on->toDateString(),
+                'cents' => $this->cents((string) $addition->amount_per_day),
+            ])
+            ->all());
+    }
+
+    /**
+     * @param  list<array{id: int, label: string, starts_on: string, ends_on: string, cents: int}>  $additions
+     */
+    private function additionOn(array $additions, string $date): int
+    {
+        $cents = 0;
+
+        foreach ($additions as $addition) {
+            if ($addition['starts_on'] <= $date && $date <= $addition['ends_on']) {
+                $cents += $addition['cents'];
+            }
+        }
+
+        return $cents;
+    }
+
+    /**
+     * @param  list<array{id: int, label: string, starts_on: string, ends_on: string, cents: int}>  $additions
+     * @param  list<string>  $windowDates
+     * @return list<array{id: int, label: string, starts_on: string, ends_on: string, amount_per_day: string, days_in_window: int, amount_in_window: string}>
+     */
+    private function additionBreakdown(array $additions, array $windowDates): array
+    {
+        $breakdown = [];
+
+        foreach ($additions as $addition) {
+            $daysInWindow = count(array_filter(
+                $windowDates,
+                fn (string $date): bool => $addition['starts_on'] <= $date && $date <= $addition['ends_on'],
+            ));
+
+            if ($daysInWindow === 0) {
+                continue;
+            }
+
+            $breakdown[] = [
+                'id' => $addition['id'],
+                'label' => $addition['label'],
+                'starts_on' => $addition['starts_on'],
+                'ends_on' => $addition['ends_on'],
+                'amount_per_day' => $this->fromCents($addition['cents']),
+                'days_in_window' => $daysInWindow,
+                'amount_in_window' => $this->fromCents($daysInWindow * $addition['cents']),
+            ];
+        }
+
+        return $breakdown;
     }
 
     private function counts(User $user, Transaction $transaction): bool

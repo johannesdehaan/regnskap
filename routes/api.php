@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\BudgetLineController;
+use App\Http\Controllers\Api\FoodBudgetAdditionController;
 use App\Http\Controllers\Api\FoodBudgetController;
 use App\Http\Controllers\Api\FoodRuleController;
 use App\Http\Controllers\Api\HoldingController;
@@ -63,6 +64,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/food-budget', [FoodBudgetController::class, 'show']);
     Route::patch('/food-budget', [FoodBudgetController::class, 'update']);
+
+    Route::get('/food-budget/additions', [FoodBudgetAdditionController::class, 'index']);
+    Route::post('/food-budget/additions', [FoodBudgetAdditionController::class, 'store']);
+    Route::patch('/food-budget/additions/{foodBudgetAddition}', [FoodBudgetAdditionController::class, 'update']);
+    Route::delete('/food-budget/additions/{foodBudgetAddition}', [FoodBudgetAdditionController::class, 'destroy']);
 
     Route::get('/food-rules', [FoodRuleController::class, 'index']);
     Route::post('/food-rules', [FoodRuleController::class, 'store']);

@@ -128,6 +128,14 @@ class User extends Authenticatable implements PasskeyUser
     }
 
     /**
+     * @return HasMany<FoodBudgetAddition, $this>
+     */
+    public function foodBudgetAdditions(): HasMany
+    {
+        return $this->hasMany(FoodBudgetAddition::class);
+    }
+
+    /**
      * Get the user's initials
      */
     public function initials(): string
