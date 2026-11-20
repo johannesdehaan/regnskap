@@ -36,6 +36,37 @@ test('users only see their own transactions in the inbox', function () {
         ->assertDontSee('Hemmelig sted');
 });
 
+test('the inbox lists what the bank has reserved under its own heading', function () {
+    $user = User::factory()->create();
+    $other = User::factory()->create();
+
+    reservedBankRow($user, [
+        'payee' => 'Bokhandel Sentrum',
+        'amount' => '-349.00',
+        'booked_on' => '2026-01-10',
+        'suggested_category' => null,
+        'counts_as_food' => false,
+    ]);
+    reservedBankRow($user, ['payee' => 'Meny Sentrum', 'amount' => '-62.40', 'booked_on' => '2026-01-11']);
+    reservedBankRow($other, ['payee' => 'Hemmelig reservasjon']);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::inbox')
+        ->assertSee('Innboksen er tom')
+        ->assertSee('Reservert hos banken')
+        ->assertSee('Upålitelig øyeblikksbilde')
+        ->assertSee('Bokhandel Sentrum')
+        ->assertSee('349,00 kr')
+        ->assertSee('10.01.2026')
+        ->assertSee('Meny Sentrum')
+        ->assertSee('Dagligvarer')
+        ->assertSee('ikke bokført')
+        ->assertDontSee('Hemmelig reservasjon');
+
+    expect($user->transactions()->count())->toBe(0);
+});
+
 test('users cannot categorize another users transaction', function () {
     $user = User::factory()->create();
     $other = User::factory()->create();

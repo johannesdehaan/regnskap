@@ -16,6 +16,7 @@ readonly class ParsedBankTransaction
         public array $lookupKeys,
         public CarbonImmutable $bookedOn,
         public string $absoluteAmount,
+        public string $signedAmount,
         public string $payee,
         public ?string $note,
         public BookingStatus $bookingStatus,

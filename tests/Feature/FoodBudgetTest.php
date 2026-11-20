@@ -2,6 +2,7 @@
 
 use App\Actions\BuildFoodBudget;
 use App\Actions\ClassifyFoodPurchase;
+use App\Enums\BookingStatus;
 use App\Enums\Category;
 use App\Enums\FoodRuleEffect;
 use App\Enums\FoodRuleMatch;
@@ -9,6 +10,7 @@ use App\Models\Transaction;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 
@@ -226,6 +228,128 @@ test('a split parent is not counted twice', function () {
     $status = app(BuildFoodBudget::class)($user);
 
     expect($status['spent'])->toBe('100.00');
+});
+
+test('reserved food purchases are reported apart and move no other number', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-07-10 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $other = User::factory()->create();
+
+    foodPurchase($user, 'Kiwi', '200.00', '2026-07-10');
+
+    $without = app(BuildFoodBudget::class)($user);
+
+    reservedBankRow($user, ['payee' => 'Rema 1000', 'amount' => '-150.00', 'booked_on' => '2026-07-10']);
+    reservedBankRow($user, ['payee' => 'Meny', 'amount' => '-60.50', 'booked_on' => '2026-07-04']);
+    reservedBankRow($user, ['payee' => 'Kiwi', 'amount' => '-90.00', 'booked_on' => '2026-07-03']);
+    reservedBankRow($user, [
+        'payee' => 'Bokhandel Sentrum',
+        'amount' => '-500.00',
+        'booked_on' => '2026-07-10',
+        'suggested_category' => null,
+        'counts_as_food' => false,
+    ]);
+    reservedBankRow($other, ['amount' => '-999.00', 'booked_on' => '2026-07-10']);
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['pending_total'])->toBe('210.50')
+        ->and($status['remaining_today_including_pending'])->toBe('989.50')
+        ->and($status['spent'])->toBe('200.00')
+        ->and($status['remaining_today'])->toBe('1200.00')
+        ->and($status['over_limit'])->toBeFalse()
+        ->and($without['pending_total'])->toBe('0.00')
+        ->and($without['remaining_today_including_pending'])->toBe('1200.00')
+        ->and(Arr::except($status, ['pending_total', 'remaining_today_including_pending']))
+        ->toBe(Arr::except($without, ['pending_total', 'remaining_today_including_pending']));
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->getJson('/api/food-budget')
+        ->assertOk()
+        ->assertJsonPath('spent', '200.00')
+        ->assertJsonPath('remaining_today', '1200.00')
+        ->assertJsonPath('pending_total', '210.50')
+        ->assertJsonPath('remaining_today_including_pending', '989.50');
+});
+
+test('reserved purchases can pass the limit without marking the budget as over', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-07-11 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+
+    foodPurchase($user, 'Kiwi', '1300.00', '2026-07-11');
+    reservedBankRow($user, ['amount' => '-250.00', 'booked_on' => '2026-07-11']);
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['remaining_today'])->toBe('100.00')
+        ->and($status['over_limit'])->toBeFalse()
+        ->and($status['pending_total'])->toBe('250.00')
+        ->and($status['remaining_today_including_pending'])->toBe('-150.00');
+});
+
+test('rows an earlier version imported as reserved do not count as spent', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-07-12 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+
+    foodPurchase($user, 'Kiwi', '100.00', '2026-07-12');
+    foodPurchase($user, 'Rema', '70.00', '2026-07-12')->update(['booking_status' => BookingStatus::Booked]);
+    foodPurchase($user, 'Meny', '300.00', '2026-07-12')->update(['booking_status' => BookingStatus::Pending]);
+    foodPurchase($user, 'Circle K', '45.00', '2026-07-12')->update(['booking_status' => BookingStatus::Pending]);
+
+    $split = foodPurchase($user, 'Coop Extra', '80.00', '2026-07-12');
+    $split->update(['booking_status' => BookingStatus::Pending]);
+    $split->children()->create([
+        'user_id' => $user->id,
+        'booked_on' => '2026-07-12',
+        'amount' => '80.00',
+        'category' => Category::Dagligvarer,
+        'payee' => 'Coop Extra',
+        'needs_review' => false,
+        'exclude_from_budget' => false,
+    ]);
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['spent'])->toBe('170.00')
+        ->and($status['pending_review'])->toBe('0.00')
+        ->and($status['remaining_today'])->toBe('1230.00')
+        ->and($status['pending_total'])->toBe('0.00');
+});
+
+test('the food budget page lists reserved food purchases as unreliable', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-07-13 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    foodPurchase($user, 'Kiwi', '100.00', '2026-07-13');
+
+    Livewire::test('pages::mat.index')
+        ->assertDontSee('Reservert hos banken');
+
+    reservedBankRow($user, ['payee' => 'Meny Sentrum', 'amount' => '-150.00', 'booked_on' => '2026-07-13']);
+    reservedBankRow($user, [
+        'payee' => 'Bokhandel Sentrum',
+        'amount' => '-500.00',
+        'booked_on' => '2026-07-13',
+        'suggested_category' => null,
+        'counts_as_food' => false,
+    ]);
+    reservedBankRow($user, ['payee' => 'Rema Gammel', 'amount' => '-40.00', 'booked_on' => '2026-07-01']);
+
+    Livewire::test('pages::mat.index')
+        ->assertSee('1 300')
+        ->assertSee('Reservert hos banken')
+        ->assertSee('1 150 kr igjen hvis alt blir bokført')
+        ->assertSee('Upålitelig øyeblikksbilde')
+        ->assertSee('Meny Sentrum')
+        ->assertSee('150,00 kr')
+        ->assertSee('ikke bokført')
+        ->assertDontSee('Bokhandel Sentrum')
+        ->assertDontSee('Rema Gammel');
 });
 
 test('guests cannot open the food budget', function () {

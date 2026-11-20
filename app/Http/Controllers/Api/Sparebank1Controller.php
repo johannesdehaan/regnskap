@@ -53,6 +53,7 @@ class Sparebank1Controller extends Controller
             'imported' => $counts['imported'],
             'updated' => $counts['updated'],
             'skipped' => $counts['skipped'],
+            'pending' => $counts['pending'],
             'last_synced_at' => $this->syncedAt($connection),
         ]);
     }

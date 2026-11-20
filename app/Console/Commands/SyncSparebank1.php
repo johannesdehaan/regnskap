@@ -38,11 +38,12 @@ class SyncSparebank1 extends Command
             try {
                 $counts = $sync($user);
                 $this->info(sprintf(
-                    'Bruker %d: %d nye, %d oppdatert, %d hoppet over.',
+                    'Bruker %d: %d nye, %d oppdatert, %d hoppet over, %d reservert.',
                     $user->id,
                     $counts['imported'],
                     $counts['updated'],
                     $counts['skipped'],
+                    $counts['pending'],
                 ));
             } catch (Sparebank1Exception $exception) {
                 $failed = true;
