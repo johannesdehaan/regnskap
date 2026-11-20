@@ -1,5 +1,10 @@
 <?php
 
+use App\Enums\BankConnectionStatus;
+use App\Enums\Category;
+use App\Models\BankConnection;
+use App\Models\PendingBankTransaction;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -47,4 +52,32 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+/**
+ * A row in the snapshot of what the bank has reserved, on a made-up card account.
+ *
+ * @param  array<string, mixed>  $attributes
+ */
+function reservedBankRow(User $user, array $attributes = []): PendingBankTransaction
+{
+    $connection = BankConnection::query()->firstOrCreate(
+        ['user_id' => $user->id],
+        ['status' => BankConnectionStatus::Connected],
+    );
+
+    $account = $connection->accounts()->firstOrCreate(
+        ['external_key' => 'reserved-card'],
+        ['user_id' => $user->id, 'name' => 'Kredittkort', 'account_type' => 'creditCard', 'currency_code' => 'NOK'],
+    );
+
+    return $account->pendingTransactions()->create(array_merge([
+        'user_id' => $user->id,
+        'booked_on' => now('Europe/Oslo')->toDateString(),
+        'amount' => '-100.00',
+        'payee' => 'Kiwi',
+        'suggested_category' => Category::Dagligvarer,
+        'counts_as_food' => true,
+        'last_seen_at' => now(),
+    ], $attributes));
 }

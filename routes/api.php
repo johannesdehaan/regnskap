@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\HousingPlanController;
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\MonthlyFigureController;
 use App\Http\Controllers\Api\OverviewController;
+use App\Http\Controllers\Api\PendingTransactionController;
 use App\Http\Controllers\Api\RecurringCostController;
 use App\Http\Controllers\Api\Sparebank1Controller;
 use App\Http\Controllers\Api\TransactionController;
@@ -25,6 +26,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/transactions/{transaction}/split', [TransactionController::class, 'split']);
     Route::delete('/transactions/{transaction}/split', [TransactionController::class, 'destroySplit']);
     Route::patch('/transactions/{transaction}', [TransactionController::class, 'update']);
+
+    Route::get('/pending-transactions', [PendingTransactionController::class, 'index']);
 
     Route::get('/budget-lines', [BudgetLineController::class, 'index']);
     Route::post('/budget-lines', [BudgetLineController::class, 'store']);

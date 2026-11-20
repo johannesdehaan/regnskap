@@ -30,6 +30,7 @@ afterEach(function () {
 
 test('unauthenticated sparebank1 api requests receive 401', function () {
     $this->getJson('/api/sparebank1')->assertUnauthorized();
+    $this->getJson('/api/pending-transactions')->assertUnauthorized();
     $this->postJson('/api/sparebank1/sync')->assertUnauthorized();
     $this->patchJson('/api/sparebank1/accounts/1', [
         'sync_enabled' => true,
@@ -182,6 +183,7 @@ test('sparebank1 sync imports transactions and returns counts', function () {
             'imported' => 1,
             'updated' => 0,
             'skipped' => 1,
+            'pending' => 0,
             'last_synced_at' => $user->bankConnection()->first()->last_synced_at->toISOString(),
         ]);
 
@@ -194,6 +196,101 @@ test('sparebank1 sync imports transactions and returns counts', function () {
         ->assertJsonPath('imported', 0)
         ->assertJsonPath('updated', 0)
         ->assertJsonPath('skipped', 2);
+});
+
+test('pending transactions lists the reserved snapshot of the authenticated user', function () {
+    $user = sparebank1ApiUser();
+    $other = sparebank1ApiUser();
+    $card = $user->bankConnection->accounts()->where('external_key', 'card-1')->sole();
+    $card->update(['sync_enabled' => true]);
+    $token = $user->createToken('test')->plainTextToken;
+
+    reservedBankRow($other, ['payee' => 'Fremmed reservasjon']);
+
+    $this->withToken($token)
+        ->getJson('/api/pending-transactions')
+        ->assertOk()
+        ->assertExactJson([]);
+
+    sparebank1ApiFake([
+        sparebank1ApiTransaction([
+            'id' => 'slot-0',
+            'nonUniqueId' => 'slot-0',
+            'date' => Carbon::parse('2026-11-09 15:00:00', 'Europe/Oslo')->getTimestamp() * 1000,
+            'amount' => 250,
+            'description' => 'Straksbetaling',
+            'cleanedDescription' => 'Straksbetaling',
+            'typeText' => 'Straksbetaling',
+            'remoteAccountNumber' => '9999.00.00009',
+            'bookingStatus' => 'PENDING',
+            'accountKey' => 'card-1',
+        ]),
+        sparebank1ApiTransaction([
+            'id' => 'slot-1',
+            'nonUniqueId' => 'slot-1',
+            'amount' => -74.9,
+            'description' => 'KIWI 123 SENTRUM',
+            'cleanedDescription' => 'Kiwi',
+            'typeText' => 'Kredittkort',
+            'bookingStatus' => 'PENDING',
+            'accountKey' => 'card-1',
+        ]),
+        sparebank1ApiTransaction([
+            'id' => 'txn-rema',
+            'nonUniqueId' => 'nu-rema',
+            'amount' => -189.5,
+            'description' => 'REMA 1000 OSLO',
+            'cleanedDescription' => 'Rema 1000',
+            'accountKey' => 'card-1',
+        ]),
+    ]);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 1)
+        ->assertJsonPath('pending', 2);
+
+    $transfer = $user->pendingBankTransactions()->where('external_id', 'slot-0')->sole();
+    $kiwi = $user->pendingBankTransactions()->where('external_id', 'slot-1')->sole();
+
+    $this->withToken($token)
+        ->getJson('/api/pending-transactions')
+        ->assertOk()
+        ->assertExactJson([
+            [
+                'id' => $kiwi->id,
+                'user_id' => $user->id,
+                'bank_account_id' => $card->id,
+                'external_id' => 'slot-1',
+                'booked_on' => '2026-11-10',
+                'amount' => '-74.90',
+                'payee' => 'Kiwi',
+                'note' => "KIWI 123 SENTRUM\nKredittkort",
+                'type_text' => 'Kredittkort',
+                'remote_account_number' => null,
+                'suggested_category' => 'Dagligvarer',
+                'counts_as_food' => true,
+                'last_seen_at' => now()->toJSON(),
+            ],
+            [
+                'id' => $transfer->id,
+                'user_id' => $user->id,
+                'bank_account_id' => $card->id,
+                'external_id' => 'slot-0',
+                'booked_on' => '2026-11-09',
+                'amount' => '250.00',
+                'payee' => 'Straksbetaling',
+                'note' => null,
+                'type_text' => 'Straksbetaling',
+                'remote_account_number' => '99990000009',
+                'suggested_category' => null,
+                'counts_as_food' => false,
+                'last_seen_at' => now()->toJSON(),
+            ],
+        ]);
+
+    expect($user->transactions()->pluck('payee')->all())->toBe(['Rema 1000']);
 });
 
 test('sparebank1 sync returns 422 when the bank is not connected', function () {

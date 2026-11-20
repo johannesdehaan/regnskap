@@ -96,10 +96,11 @@ new #[Title('Bank')] class extends Component
         }
 
         $this->bankStatus = sprintf(
-            'Synk ferdig. %d nye, %d oppdatert, %d hoppet over.',
+            'Synk ferdig. %d nye, %d oppdatert, %d hoppet over, %d reservert.',
             $counts['imported'],
             $counts['updated'],
             $counts['skipped'],
+            $counts['pending'],
         );
         $this->loadConnection();
         Flux::toast(variant: 'success', text: $this->bankStatus);
@@ -107,7 +108,9 @@ new #[Title('Bank')] class extends Component
 
     public function disconnect(): void
     {
-        Auth::user()->bankConnection?->forgetTokens();
+        $user = Auth::user();
+        $user->bankConnection?->forgetTokens();
+        $user->pendingBankTransactions()->delete();
         $this->bankStatus = 'SpareBank 1 er koblet fra. Tokens er slettet.';
         $this->bankError = null;
         $this->loadConnection();

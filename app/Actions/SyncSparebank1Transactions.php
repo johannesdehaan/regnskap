@@ -3,6 +3,7 @@
 namespace App\Actions;
 
 use App\Enums\BankConnectionStatus;
+use App\Enums\BookingStatus;
 use App\Exceptions\Sparebank1Exception;
 use App\Models\BankConnection;
 use App\Models\User;
@@ -19,11 +20,15 @@ class SyncSparebank1Transactions
         private RefreshSparebank1Accounts $accounts,
         private Sparebank1TransactionParser $parser,
         private RecordSparebank1Transaction $record,
+        private ReplacePendingBankTransactions $replacePending,
         private BankMovement $movement,
     ) {}
 
     /**
-     * @return array{imported: int, updated: int, skipped: int}
+     * Booked rows become transactions. Reserved rows only replace the
+     * account's snapshot in pending_bank_transactions.
+     *
+     * @return array{imported: int, updated: int, skipped: int, pending: int}
      */
     public function __invoke(User $user): array
     {
@@ -38,6 +43,10 @@ class SyncSparebank1Transactions
             $connection->unsetRelation('accounts');
 
             $enabled = $connection->accounts()->where('sync_enabled', true)->get();
+
+            $user->pendingBankTransactions()
+                ->whereNotIn('bank_account_id', $enabled->modelKeys())
+                ->delete();
 
             if ($enabled->isEmpty()) {
                 throw new Sparebank1Exception('Velg minst én konto som skal synkes.');
@@ -59,12 +68,13 @@ class SyncSparebank1Transactions
                 : $today->subDays(90)->toDateString();
             $to = $today->toDateString();
 
-            $counts = ['imported' => 0, 'updated' => 0, 'skipped' => 0];
+            $counts = ['imported' => 0, 'updated' => 0, 'skipped' => 0, 'pending' => 0];
             $warnings = [];
 
             foreach ($enabled as $account) {
                 $page = $this->fetch($connection, $account->external_key, $from, $to, 0);
                 array_push($warnings, ...$this->warningText($page['errors']));
+                $reserved = [];
 
                 foreach ($page['transactions'] as $row) {
                     $parsed = $this->parser->parse($account->external_key, $row);
@@ -75,9 +85,25 @@ class SyncSparebank1Transactions
                         continue;
                     }
 
+                    if ($parsed->bookingStatus === BookingStatus::Pending) {
+                        $reserved[] = $parsed;
+
+                        continue;
+                    }
+
                     $result = ($this->record)($user, $account, $parsed, $ownNumbers);
                     $counts[$result]++;
                 }
+
+                // The bank could not fetch its recent rows, so a missing
+                // reservation says nothing. The last snapshot stays.
+                if (in_array('RECENT_TRANSACTIONS_FAILED', $page['errors'], true)) {
+                    $counts['pending'] += $account->pendingTransactions()->count();
+
+                    continue;
+                }
+
+                $counts['pending'] += ($this->replacePending)($user, $account, $reserved, $ownNumbers);
             }
 
             $connection->forceFill([
