@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Actions\ClassifyFoodPurchase;
 use App\Actions\SplitTransactionLines;
+use App\Enums\BookingStatus;
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Enums\Subcategory;
@@ -12,6 +13,7 @@ use App\Models\Transaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -27,14 +29,22 @@ class TransactionController extends Controller
             'payment_method' => ['nullable', 'string'],
             'q' => ['nullable', 'string'],
             'inbox' => ['nullable'],
+            'booking_status' => ['nullable', Rule::enum(BookingStatus::class)],
         ]);
 
         $query = $this->user($request)->transactions()->orderByDesc('booked_on')->orderByDesc('id');
+        $bookingStatus = $validated['booking_status'] ?? null;
 
+        // Only bank rows have a booking status, and a split bank row is the
+        // parent, so this filter lists parents instead of their lines.
         if ($request->boolean('inbox')) {
             $query->inbox();
-        } else {
+        } elseif (empty($bookingStatus)) {
             $query->excludingSplitParents();
+        }
+
+        if (! empty($bookingStatus)) {
+            $query->where('booking_status', $bookingStatus);
         }
 
         if (! empty($validated['month'])) {
@@ -160,6 +170,28 @@ class TransactionController extends Controller
         $transaction->update($validated);
 
         return response()->json($transaction->refresh());
+    }
+
+    /**
+     * Deleting a bank row also deletes its split lines. A row the bank still
+     * reports as booked inside the sync window is imported again as new.
+     */
+    public function destroy(Transaction $transaction): JsonResponse
+    {
+        $this->authorize('delete', $transaction);
+
+        if ($transaction->parent_id !== null) {
+            throw ValidationException::withMessages([
+                'transaction' => 'En delingslinje kan ikke slettes alene. Slett den opprinnelige transaksjonen, eller fjern delingen.',
+            ]);
+        }
+
+        DB::transaction(function () use ($transaction): void {
+            $transaction->children()->delete();
+            $transaction->delete();
+        });
+
+        return response()->json(status: 204);
     }
 
     public function split(Request $request, Transaction $transaction, SplitTransactionLines $lines): JsonResponse

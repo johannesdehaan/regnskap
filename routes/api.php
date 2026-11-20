@@ -26,6 +26,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/transactions/{transaction}/split', [TransactionController::class, 'split']);
     Route::delete('/transactions/{transaction}/split', [TransactionController::class, 'destroySplit']);
     Route::patch('/transactions/{transaction}', [TransactionController::class, 'update']);
+    Route::delete('/transactions/{transaction}', [TransactionController::class, 'destroy']);
 
     Route::get('/pending-transactions', [PendingTransactionController::class, 'index']);
 
