@@ -27,7 +27,7 @@ class RecordSparebank1Transaction
         $existing = $this->findExisting($user, $account, $parsed);
 
         if ($existing instanceof Transaction) {
-            return $this->update($user, $account, $existing, $parsed, $ownAccountNumbers);
+            return $this->update($account, $existing, $parsed);
         }
 
         try {
@@ -40,16 +40,17 @@ class RecordSparebank1Transaction
     }
 
     /**
-     * @param  list<string>  $ownAccountNumbers
+     * Refresh what the bank reports on a row that is already imported.
+     * Category, subcategory, note, payment method, exclude_from_budget and
+     * needs_review are set when the row is created and belong to whoever
+     * edits it afterwards, so they are never derived again here. The one
+     * exception is a split whose bank amount changes: its lines no longer
+     * add up, so the parent goes back to the inbox.
+     *
      * @return 'updated'|'skipped'
      */
-    private function update(
-        User $user,
-        BankAccount $account,
-        Transaction $existing,
-        ParsedBankTransaction $parsed,
-        array $ownAccountNumbers,
-    ): string {
+    private function update(BankAccount $account, Transaction $existing, ParsedBankTransaction $parsed): string
+    {
         $amountChanged = $this->toCents((string) $existing->amount) !== $this->toCents($parsed->absoluteAmount);
         $alreadyBooked = $existing->booking_status === BookingStatus::Booked
             && $parsed->bookingStatus === BookingStatus::Booked
@@ -65,8 +66,6 @@ class RecordSparebank1Transaction
             return 'skipped';
         }
 
-        $incoming = $this->attributes($user, $account, $parsed, $ownAccountNumbers);
-
         $existing->fill([
             'external_id' => $parsed->externalId,
             'dedupe_key' => $parsed->dedupeKey,
@@ -74,27 +73,8 @@ class RecordSparebank1Transaction
             'bank_account_id' => $account->id,
             'booked_on' => $parsed->bookedOn->toDateString(),
             'amount' => $parsed->absoluteAmount,
+            'payee' => $parsed->payee,
         ]);
-
-        if ($incoming['exclude_from_budget'] === true) {
-            $existing->fill([
-                'category' => null,
-                'needs_review' => false,
-                'exclude_from_budget' => true,
-                'payee' => $incoming['payee'],
-                'note' => $incoming['note'],
-                'payment_method' => $incoming['payment_method'],
-            ]);
-        } elseif ($existing->category === null) {
-            $existing->fill([
-                'category' => $incoming['category'],
-                'needs_review' => $incoming['needs_review'],
-                'exclude_from_budget' => false,
-                'payee' => $incoming['payee'],
-                'note' => $incoming['note'],
-                'payment_method' => $incoming['payment_method'],
-            ]);
-        }
 
         if ($hasSplit && $amountChanged) {
             $existing->needs_review = true;

@@ -390,6 +390,221 @@ test('a reserved amount is updated in place when it is booked', function () {
         ->and($transaction->amount)->toBe('62.40');
 });
 
+test('a new bank row gets its defaults from the food rules, the bank text and the account', function () {
+    $user = connectedUserWithCard();
+
+    fakeSparebank1(transactions: [
+        pendingCardPurchase(),
+        bankTransaction([
+            'id' => 'card-kiwi',
+            'nonUniqueId' => 'card-kiwi-row',
+            'amount' => -74.9,
+            'description' => 'KIWI 123 SENTRUM',
+            'cleanedDescription' => 'Kiwi',
+            'accountKey' => 'card-1',
+            'typeText' => 'Kredittkort',
+        ]),
+    ]);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 2)
+        ->assertJsonPath('updated', 0);
+
+    $unknown = $user->transactions()->where('external_id', 'card-pending')->sole();
+    $grocery = $user->transactions()->where('external_id', 'card-kiwi')->sole();
+
+    expect($unknown->booking_status)->toBe(BookingStatus::Pending)
+        ->and($unknown->amount)->toBe('349.00')
+        ->and($unknown->booked_on->toDateString())->toBe('2026-11-10')
+        ->and($unknown->payee)->toBe('Bokhandel Sentrum')
+        ->and($unknown->note)->toBe('Kredittkort')
+        ->and($unknown->category)->toBeNull()
+        ->and($unknown->subcategory)->toBeNull()
+        ->and($unknown->needs_review)->toBeTrue()
+        ->and($unknown->exclude_from_budget)->toBeFalse()
+        ->and($unknown->payment_method)->toBe(PaymentMethod::Kredittkort);
+
+    expect($grocery->booking_status)->toBe(BookingStatus::Booked)
+        ->and($grocery->amount)->toBe('74.90')
+        ->and($grocery->payee)->toBe('Kiwi')
+        ->and($grocery->note)->toBe("KIWI 123 SENTRUM\nKredittkort")
+        ->and($grocery->category)->toBe(Category::Dagligvarer)
+        ->and($grocery->subcategory)->toBeNull()
+        ->and($grocery->needs_review)->toBeFalse()
+        ->and($grocery->exclude_from_budget)->toBeFalse()
+        ->and($grocery->payment_method)->toBe(PaymentMethod::Kredittkort);
+});
+
+test('a later sync updates the bank fields on a pending row and keeps manual edits', function (array $edits) {
+    $user = connectedUserWithCard();
+    $token = $user->createToken('test')->plainTextToken;
+
+    fakeSparebank1(transactions: [pendingCardPurchase()]);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 1);
+
+    $row = $user->transactions()->sole();
+
+    $this->withToken($token)
+        ->patchJson('/api/transactions/'.$row->id, $edits)
+        ->assertOk()
+        ->assertJson($edits);
+
+    $edited = $row->refresh()->only(manualTransactionFields());
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 0)
+        ->assertJsonPath('updated', 0)
+        ->assertJsonPath('skipped', 1);
+
+    expect($row->refresh()->only(manualTransactionFields()))->toBe($edited)
+        ->and($row->booking_status)->toBe(BookingStatus::Pending)
+        ->and($row->amount)->toBe('349.00');
+
+    fakeSparebank1(transactions: [
+        pendingCardPurchase([
+            'id' => 'card-booked',
+            'amount' => -352.5,
+            'description' => 'BOKHANDEL SENTRUM OSLO',
+            'cleanedDescription' => 'Bokhandel Sentrum Oslo',
+            'bookingStatus' => 'BOOKED',
+            'date' => bankMillis('2026-11-11 09:00:00'),
+        ]),
+    ]);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 0)
+        ->assertJsonPath('updated', 1);
+
+    expect($user->transactions()->count())->toBe(1)
+        ->and($row->refresh()->only(manualTransactionFields()))->toBe($edited)
+        ->and($row->booking_status)->toBe(BookingStatus::Booked)
+        ->and($row->amount)->toBe('352.50')
+        ->and($row->booked_on->toDateString())->toBe('2026-11-11')
+        ->and($row->payee)->toBe('Bokhandel Sentrum Oslo')
+        ->and($row->external_id)->toBe('card-booked');
+})->with([
+    'excluded and reviewed, still without a category' => [[
+        'exclude_from_budget' => true,
+        'needs_review' => false,
+        'note' => 'Utlegg som blir refundert',
+    ]],
+    'categorized by hand' => [[
+        'category' => 'Dagligvarer',
+        'subcategory' => 'Husholdning',
+        'payment_method' => 'Wise',
+        'note' => 'Vaskemidler',
+        'exclude_from_budget' => false,
+        'needs_review' => false,
+    ]],
+]);
+
+test('a later sync does not move a hand-categorized transfer back outside the budget', function () {
+    $user = connectedUser();
+    $user->bankConnection->accounts()->where('external_key', 'use-1')->update(['sync_enabled' => true]);
+    $token = $user->createToken('test')->plainTextToken;
+    $transfer = [
+        'id' => 'transfer-pending',
+        'nonUniqueId' => 'transfer-row',
+        'amount' => -1500,
+        'description' => 'Overføring',
+        'cleanedDescription' => 'Overføring',
+        'typeText' => 'Overføring',
+        'remoteAccountNumber' => '1200.00.00003',
+        'bookingStatus' => 'PENDING',
+    ];
+
+    fakeSparebank1(transactions: [bankTransaction($transfer)]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $row = $user->transactions()->sole();
+
+    expect($row->exclude_from_budget)->toBeTrue()
+        ->and($row->category)->toBeNull()
+        ->and($row->needs_review)->toBeFalse();
+
+    $this->withToken($token)
+        ->patchJson('/api/transactions/'.$row->id, [
+            'category' => 'Bokostnader',
+            'exclude_from_budget' => false,
+            'note' => 'Husleie betalt fra sparekontoen',
+        ])
+        ->assertOk();
+
+    fakeSparebank1(transactions: [
+        bankTransaction(array_merge($transfer, ['id' => 'transfer-booked', 'bookingStatus' => 'BOOKED'])),
+    ]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $row->refresh();
+
+    expect($user->transactions()->count())->toBe(1)
+        ->and($row->booking_status)->toBe(BookingStatus::Booked)
+        ->and($row->external_id)->toBe('transfer-booked')
+        ->and($row->category)->toBe(Category::Bokostnader)
+        ->and($row->exclude_from_budget)->toBeFalse()
+        ->and($row->needs_review)->toBeFalse()
+        ->and($row->note)->toBe('Husleie betalt fra sparekontoen');
+});
+
+test('a later sync only refreshes the bank fields on a split and leaves its lines alone', function () {
+    $user = connectedUserWithCard();
+    $token = $user->createToken('test')->plainTextToken;
+
+    fakeSparebank1(transactions: [pendingCardPurchase()]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $parent = $user->transactions()->sole();
+
+    $this->withToken($token)
+        ->patchJson('/api/transactions/'.$parent->id, ['note' => 'Kvittering ligger i appen'])
+        ->assertOk();
+
+    $this->withToken($token)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Utdanning', 'amount' => '249.00', 'note' => 'lærebok'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => '100.00'],
+            ],
+        ])
+        ->assertOk();
+
+    $edited = $parent->refresh()->only(manualTransactionFields());
+    $lines = $parent->children()->orderBy('id')->get()->toArray();
+
+    expect($edited['note'])->toBe('Kvittering ligger i appen')
+        ->and($edited['needs_review'])->toBeFalse()
+        ->and($lines)->toHaveCount(2);
+
+    fakeSparebank1(transactions: [
+        pendingCardPurchase(['id' => 'card-booked', 'bookingStatus' => 'BOOKED']),
+    ]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $parent->refresh();
+
+    expect($parent->booking_status)->toBe(BookingStatus::Booked)
+        ->and($parent->external_id)->toBe('card-booked')
+        ->and($parent->amount)->toBe('349.00')
+        ->and($parent->only(manualTransactionFields()))->toBe($edited)
+        ->and($parent->children()->orderBy('id')->get()->toArray())->toBe($lines)
+        ->and($user->transactions()->whereNull('parent_id')->count())->toBe(1)
+        ->and($user->transactions()->inbox()->count())->toBe(0);
+});
+
 test('an expired access token is refreshed and the new token is stored encrypted', function () {
     $user = connectedUser();
     $connection = $user->bankConnection;
@@ -590,6 +805,32 @@ function bankTransaction(array $overrides = []): array
     ], $overrides);
 }
 
+/**
+ * @param  array<string, mixed>  $overrides
+ * @return array<string, mixed>
+ */
+function pendingCardPurchase(array $overrides = []): array
+{
+    return bankTransaction(array_merge([
+        'id' => 'card-pending',
+        'nonUniqueId' => 'card-row',
+        'amount' => -349,
+        'description' => 'Bokhandel Sentrum',
+        'cleanedDescription' => 'Bokhandel Sentrum',
+        'bookingStatus' => 'PENDING',
+        'accountKey' => 'card-1',
+        'typeText' => 'Kredittkort',
+    ], $overrides));
+}
+
+/**
+ * @return list<string>
+ */
+function manualTransactionFields(): array
+{
+    return ['category', 'subcategory', 'note', 'exclude_from_budget', 'needs_review', 'payment_method'];
+}
+
 function bankMillis(string $date): int
 {
     return Carbon::parse($date, 'Europe/Oslo')->getTimestamp() * 1000;
@@ -623,4 +864,16 @@ function connectedUser(): User
     }
 
     return $user->fresh();
+}
+
+function connectedUserWithCard(): User
+{
+    $user = connectedUser();
+
+    $user->bankConnection->accounts()->where('external_key', 'card-1')->update([
+        'sync_enabled' => true,
+        'payment_method' => PaymentMethod::Kredittkort,
+    ]);
+
+    return $user;
 }
