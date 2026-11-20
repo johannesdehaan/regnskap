@@ -56,4 +56,12 @@
         {{ __('Venter på vurdering') }}:
         <span class="font-semibold tabular-nums">{{ $kroner($status['pending_review']) }} kr</span>
     </p>
+
+    @if ((float) $status['pending_total'] > 0)
+        <p class="mt-1 text-sm opacity-80" data-test="food-reserved">
+            {{ __('Reservert hos banken') }}:
+            <span class="font-semibold tabular-nums">{{ $kroner($status['pending_total']) }} kr</span>
+            · {{ __(':amount kr igjen hvis alt blir bokført', ['amount' => $kroner($status['remaining_today_including_pending'])]) }}
+        </p>
+    @endif
 </div>

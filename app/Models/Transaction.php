@@ -123,4 +123,21 @@ class Transaction extends Model
     {
         $query->whereDoesntHave('children');
     }
+
+    /**
+     * Leaves out rows that an earlier version imported while the bank had
+     * only reserved them, and the split lines of such a row. The sync no
+     * longer touches them, and the booked row is imported on its own.
+     *
+     * @param  Builder<Transaction>  $query
+     */
+    public function scopeExcludingReserved(Builder $query): void
+    {
+        $query->where(function (Builder $own): void {
+            $own->whereNull('booking_status')
+                ->orWhere('booking_status', '!=', BookingStatus::Pending->value);
+        })->whereDoesntHave('parent', function (Builder $parent): void {
+            $parent->where('booking_status', BookingStatus::Pending->value);
+        });
+    }
 }

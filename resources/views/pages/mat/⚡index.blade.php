@@ -2,9 +2,11 @@
 
 use App\Actions\BuildFoodBudget;
 use App\Models\FoodBudgetAddition;
+use App\Models\PendingBankTransaction;
 use App\Models\Transaction;
 use Carbon\CarbonImmutable;
 use Flux\Flux;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -44,6 +46,23 @@ new #[Title('Matbudsjett')] class extends Component
     public function status(): array
     {
         return app(BuildFoodBudget::class)(Auth::user());
+    }
+
+    /**
+     * The reserved purchases behind pending_total.
+     *
+     * @return Collection<int, PendingBankTransaction>
+     */
+    #[Computed]
+    public function reserved(): Collection
+    {
+        $today = CarbonImmutable::parse($this->status['today']);
+
+        return Auth::user()->pendingBankTransactions()
+            ->foodBetween($today->subDays($this->status['window_days'] - 1)->toDateString(), $today->toDateString())
+            ->orderByDesc('booked_on')
+            ->orderByDesc('id')
+            ->get();
     }
 
     /**
@@ -244,6 +263,8 @@ new #[Title('Matbudsjett')] class extends Component
             @endforeach
         </div>
     </div>
+
+    <x-reserved-bank-rows :rows="$this->reserved" />
 
     @if ($this->status['rolloff'] !== [])
         <div class="space-y-2">
