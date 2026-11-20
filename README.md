@@ -30,7 +30,7 @@ Migrasjonene er portable (ingen SQLite-spesifikke kolonner), så samme skjema kj
 
 ## SpareBank 1
 
-Innstillinger → **Bank** (`/settings/bank`) kobler til SpareBank 1 med OAuth og BankID. Transaksjoner hentes med `php artisan sparebank1:sync`, som også kjører hver sjette time. Matreglene kjøres på nye rader. Klient-ID og hemmelighet kommer fra `SPAREBANK1_CLIENT_ID` og `SPAREBANK1_CLIENT_SECRET` og skal ikke committes. Tokens lagres kryptert per bruker.
+Innstillinger → **Bank** (`/settings/bank`) kobler til SpareBank 1 med OAuth og BankID. Transaksjoner hentes med `php artisan sparebank1:sync`, som også kjører hver sjette time. Matreglene kjøres på nye rader. På en rad som finnes fra før oppdaterer synken bare det banken melder (beløp, dato, status, brukersted og bankens id-er). Kategori, underkategori, notat, betalingsmåte, `exclude_from_budget` og `needs_review` blir stående slik de er satt. Unntaket er en delt rad der banken endrer beløpet: den får `needs_review` igjen, fordi delene ikke lenger summerer til beløpet. Klient-ID og hemmelighet kommer fra `SPAREBANK1_CLIENT_ID` og `SPAREBANK1_CLIENT_SECRET` og skal ikke committes. Tokens lagres kryptert per bruker.
 
 ## API
 
