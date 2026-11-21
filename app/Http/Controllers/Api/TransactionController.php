@@ -170,7 +170,7 @@ class TransactionController extends Controller
             'lines' => ['required', 'array', 'min:1', 'max:20'],
             'lines.*.category' => ['required', Rule::enum(Category::class)],
             'lines.*.subcategory' => ['nullable', Rule::enum(Subcategory::class)],
-            'lines.*.amount' => ['required', 'numeric', 'gt:0'],
+            'lines.*.amount' => ['required', 'numeric'],
             'lines.*.note' => ['nullable', 'string'],
         ]);
 
