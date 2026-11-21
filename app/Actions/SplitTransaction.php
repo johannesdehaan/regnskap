@@ -11,17 +11,19 @@ class SplitTransaction
 {
     /**
      * Split a parent into two categorized children whose amounts sum exactly
-     * to the original. Existing children are replaced. The parent stays, with
-     * needs_review cleared, so the inbox moves on (see Transaction).
+     * to the original. Either part may be negative, for a discount or a
+     * redeemed store bonus, but neither may be zero. Existing children are
+     * replaced. The parent stays, with needs_review cleared, so the inbox
+     * moves on (see Transaction).
      */
     public function __invoke(Transaction $parent, string $firstAmount, Category $first, Category $second): void
     {
         $totalCents = $this->toCents((string) $parent->amount);
         $firstCents = $this->toCents($firstAmount);
 
-        if ($firstCents <= 0 || $firstCents >= $totalCents) {
+        if ($totalCents <= 0 || $firstCents === 0 || $firstCents === $totalCents) {
             throw ValidationException::withMessages([
-                'splitAmount' => 'Delbeløpet må være større enn 0 og mindre enn totalsummen.',
+                'splitAmount' => 'Delbeløpet kan ikke være 0 eller lik totalsummen.',
             ]);
         }
 

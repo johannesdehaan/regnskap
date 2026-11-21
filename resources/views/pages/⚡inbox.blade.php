@@ -148,7 +148,7 @@ new #[Title('Innboks')] class extends Component
         $transaction = $this->currentForUpdate();
 
         $this->validate([
-            'splitAmount' => ['required', 'numeric', 'gt:0'],
+            'splitAmount' => ['required', 'numeric'],
             'splitCategoryA' => ['required'],
             'splitCategoryB' => ['required'],
         ]);
@@ -238,7 +238,6 @@ new #[Title('Innboks')] class extends Component
                     wire:model="splitAmount"
                     type="number"
                     step="0.01"
-                    min="0.01"
                     :label="__('Beløp i første del')"
                     required
                 />
