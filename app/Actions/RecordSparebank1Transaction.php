@@ -7,24 +7,27 @@ use App\Models\BankAccount;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Services\Sparebank1\ParsedBankTransaction;
-use App\Support\BankMovement;
-use App\Support\FoodText;
 use Illuminate\Database\UniqueConstraintViolationException;
+use LogicException;
 
 class RecordSparebank1Transaction
 {
-    public function __construct(
-        private ClassifyFoodPurchase $classify,
-        private BankMovement $movement,
-    ) {}
+    public function __construct(private ClassifyBankTransaction $classify) {}
 
     /**
+     * Record a row the bank has booked. Reserved rows never become
+     * transactions; they go to ReplacePendingBankTransactions.
+     *
      * @param  list<string>  $ownAccountNumbers
      * @return 'imported'|'updated'|'skipped'
      */
     public function __invoke(User $user, BankAccount $account, ParsedBankTransaction $parsed, array $ownAccountNumbers): string
     {
-        $existing = $this->findExisting($user, $account, $parsed);
+        if ($parsed->bookingStatus !== BookingStatus::Booked) {
+            throw new LogicException('Only booked bank rows can be recorded as transactions.');
+        }
+
+        $existing = $this->findExisting($user, $parsed);
 
         if ($existing instanceof Transaction) {
             return $this->update($account, $existing, $parsed);
@@ -52,24 +55,21 @@ class RecordSparebank1Transaction
     private function update(BankAccount $account, Transaction $existing, ParsedBankTransaction $parsed): string
     {
         $amountChanged = $this->toCents((string) $existing->amount) !== $this->toCents($parsed->absoluteAmount);
-        $alreadyBooked = $existing->booking_status === BookingStatus::Booked
-            && $parsed->bookingStatus === BookingStatus::Booked
-            && $existing->external_id === $parsed->externalId;
+        $sameBankId = $existing->external_id === $parsed->externalId;
 
-        if ($alreadyBooked && ! $amountChanged) {
+        if ($sameBankId && ! $amountChanged) {
             return 'skipped';
         }
 
         $hasSplit = $existing->children()->exists();
 
-        if ($alreadyBooked && ! $hasSplit) {
+        if ($sameBankId && ! $hasSplit) {
             return 'skipped';
         }
 
         $existing->fill([
             'external_id' => $parsed->externalId,
             'dedupe_key' => $parsed->dedupeKey,
-            'booking_status' => $parsed->bookingStatus,
             'bank_account_id' => $account->id,
             'booked_on' => $parsed->bookedOn->toDateString(),
             'amount' => $parsed->absoluteAmount,
@@ -93,33 +93,32 @@ class RecordSparebank1Transaction
         return 'updated';
     }
 
-    private function findExisting(User $user, BankAccount $account, ParsedBankTransaction $parsed): ?Transaction
+    /**
+     * A booked row is only ever matched with a booked row. Rows that were
+     * imported as reserved by earlier versions stay as they are, because the
+     * keys they hold may belong to another transaction by now. They give up
+     * those keys here, so the booked row can be stored next to them.
+     */
+    private function findExisting(User $user, ParsedBankTransaction $parsed): ?Transaction
     {
-        $match = $user->transactions()
+        $matches = $user->transactions()
             ->whereNull('parent_id')
             ->where(function ($query) use ($parsed): void {
                 $query->where('external_id', $parsed->externalId)
                     ->orWhereIn('dedupe_key', $parsed->lookupKeys);
             })
-            ->first();
+            ->orderBy('id')
+            ->get();
 
-        if ($match instanceof Transaction || $parsed->bookingStatus !== BookingStatus::Booked) {
-            return $match;
+        [$reserved, $booked] = $matches->partition(
+            fn (Transaction $transaction): bool => $transaction->booking_status === BookingStatus::Pending,
+        );
+
+        foreach ($reserved as $transaction) {
+            $transaction->forceFill(['external_id' => null, 'dedupe_key' => null])->save();
         }
 
-        $candidates = $user->transactions()
-            ->whereNull('parent_id')
-            ->where('bank_account_id', $account->id)
-            ->where('booking_status', BookingStatus::Pending->value)
-            ->where('amount', $parsed->absoluteAmount)
-            ->whereDate('booked_on', '>=', $parsed->bookedOn->subDays(10)->toDateString())
-            ->whereDate('booked_on', '<=', $parsed->bookedOn->addDays(2)->toDateString())
-            ->get()
-            ->filter(fn (Transaction $transaction): bool => $this->similar($transaction->payee, $parsed->payee)
-                || $this->similar($transaction->note ?? '', $parsed->payee)
-                || $this->similar($transaction->payee, $parsed->note ?? ''));
-
-        return $candidates->count() === 1 ? $candidates->first() : null;
+        return $booked->first();
     }
 
     /**
@@ -128,36 +127,20 @@ class RecordSparebank1Transaction
      */
     private function attributes(User $user, BankAccount $account, ParsedBankTransaction $parsed, array $ownAccountNumbers): array
     {
-        $classification = ($this->classify)($user, $parsed->payee, $parsed->note);
-        $category = $classification->category;
-        $needsReview = $classification->needsReview;
-        $exclude = false;
-
-        if ($this->movement->isNonConsumption(
-            $parsed->payee,
-            $parsed->note,
-            $parsed->typeText,
-            $parsed->remoteAccountNumber,
-            $account->account_type,
-            $ownAccountNumbers,
-        )) {
-            $category = null;
-            $needsReview = false;
-            $exclude = true;
-        }
+        $defaults = ($this->classify)($user, $account, $parsed, $ownAccountNumbers);
 
         return [
             'external_id' => $parsed->externalId,
             'bank_account_id' => $account->id,
-            'booking_status' => $parsed->bookingStatus,
+            'booking_status' => BookingStatus::Booked,
             'dedupe_key' => $parsed->dedupeKey,
             'booked_on' => $parsed->bookedOn->toDateString(),
             'amount' => $parsed->absoluteAmount,
             'payee' => $parsed->payee,
             'note' => $parsed->note,
-            'category' => $category,
-            'needs_review' => $needsReview,
-            'exclude_from_budget' => $exclude,
+            'category' => $defaults->category,
+            'needs_review' => $defaults->needsReview,
+            'exclude_from_budget' => $defaults->excludeFromBudget,
             'payment_method' => $account->payment_method,
         ];
     }
@@ -165,17 +148,5 @@ class RecordSparebank1Transaction
     private function toCents(string $amount): int
     {
         return (int) round(((float) $amount) * 100);
-    }
-
-    private function similar(string $left, string $right): bool
-    {
-        $left = FoodText::normalize($left);
-        $right = FoodText::normalize($right);
-
-        if ($left === '' || $right === '') {
-            return false;
-        }
-
-        return $left === $right || str_contains($left, $right) || str_contains($right, $left);
     }
 }

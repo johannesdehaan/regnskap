@@ -487,7 +487,7 @@ test('a sparebank sync that changes the amount flags the split parent and keeps 
     $account = receiptSplitAccount($user);
     $record = app(RecordSparebank1Transaction::class);
 
-    expect($record($user, $account, receiptSplitParsed('pending-id', '80.00', BookingStatus::Pending), []))->toBe('imported');
+    expect($record($user, $account, receiptSplitParsed('first-id', '80.00'), []))->toBe('imported');
 
     $parent = $user->transactions()->whereNull('parent_id')->first();
     $token = $user->createToken('test')->plainTextToken;
@@ -503,21 +503,22 @@ test('a sparebank sync that changes the amount flags the split parent and keeps 
 
     $childIds = $parent->children()->pluck('id');
 
-    expect($record($user, $account, receiptSplitParsed('booked-same', '80.00', BookingStatus::Booked), []))->toBe('updated');
+    expect($record($user, $account, receiptSplitParsed('rotated-id', '80.00'), []))->toBe('updated');
 
     $parent->refresh();
 
     expect($parent->booking_status)->toBe(BookingStatus::Booked)
+        ->and($parent->external_id)->toBe('rotated-id')
         ->and($parent->needs_review)->toBeFalse()
         ->and($parent->amount)->toBe('80.00')
         ->and($parent->children()->pluck('id')->all())->toBe($childIds->all())
         ->and($user->transactions()->whereNull('parent_id')->count())->toBe(1);
 
-    expect($record($user, $account, receiptSplitParsed('booked-new-amount', '95.00', BookingStatus::Booked), []))->toBe('updated');
+    expect($record($user, $account, receiptSplitParsed('booked-new-amount', '95.00'), []))->toBe('updated');
 
     $parent->refresh();
 
-    expect($record($user, $account, receiptSplitParsed('booked-new-amount', '110.00', BookingStatus::Booked), []))->toBe('updated');
+    expect($record($user, $account, receiptSplitParsed('booked-new-amount', '110.00'), []))->toBe('updated');
 
     $parent->refresh();
 
@@ -579,7 +580,7 @@ function receiptSplitAccount(User $user): BankAccount
     ]);
 }
 
-function receiptSplitParsed(string $externalId, string $amount, BookingStatus $status): ParsedBankTransaction
+function receiptSplitParsed(string $externalId, string $amount): ParsedBankTransaction
 {
     $dedupe = hash('sha256', 'stable-rema');
 
@@ -589,9 +590,10 @@ function receiptSplitParsed(string $externalId, string $amount, BookingStatus $s
         lookupKeys: [$dedupe],
         bookedOn: CarbonImmutable::parse('2026-11-13', 'Europe/Oslo'),
         absoluteAmount: $amount,
+        signedAmount: '-'.$amount,
         payee: 'Rema 1000',
         note: null,
-        bookingStatus: $status,
+        bookingStatus: BookingStatus::Booked,
         remoteAccountNumber: null,
         typeText: null,
     );

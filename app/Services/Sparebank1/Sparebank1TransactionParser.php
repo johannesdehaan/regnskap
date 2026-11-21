@@ -11,6 +11,10 @@ use Carbon\CarbonImmutable;
  * Den krypterte transaksjons-id-en fra SpareBank 1 er ikke stabil mellom økter.
  * nonUniqueId kan ikke brukes alene, så den lagres sammen med kontonøkkelen.
  * Uten den brukes et fingeravtrykk av konto, dato, beløp, tekst og motkonto.
+ *
+ * For reserverte rader er samme id eller nonUniqueId sett på ulike
+ * transaksjoner fra synk til synk, så nøklene herfra brukes bare til å kjenne
+ * igjen bokførte rader.
  */
 class Sparebank1TransactionParser
 {
@@ -60,6 +64,7 @@ class Sparebank1TransactionParser
             lookupKeys: $lookup,
             bookedOn: $bookedOn,
             absoluteAmount: number_format(abs((float) $signed), 2, '.', ''),
+            signedAmount: $signed,
             payee: $payee,
             note: $note,
             bookingStatus: BookingStatus::fromBank($this->text($row['bookingStatus'] ?? null)),

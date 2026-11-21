@@ -72,6 +72,14 @@ class User extends Authenticatable implements PasskeyUser
     }
 
     /**
+     * @return HasMany<PendingBankTransaction, $this>
+     */
+    public function pendingBankTransactions(): HasMany
+    {
+        return $this->hasMany(PendingBankTransaction::class);
+    }
+
+    /**
      * @return HasMany<BudgetLine, $this>
      */
     public function budgetLines(): HasMany

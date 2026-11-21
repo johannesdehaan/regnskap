@@ -68,6 +68,14 @@ class BankAccount extends Model
         return $this->hasMany(Transaction::class);
     }
 
+    /**
+     * @return HasMany<PendingBankTransaction, $this>
+     */
+    public function pendingTransactions(): HasMany
+    {
+        return $this->hasMany(PendingBankTransaction::class);
+    }
+
     public function displayNumber(): string
     {
         $digits = preg_replace('/\D+/', '', $this->account_number ?? '') ?? '';

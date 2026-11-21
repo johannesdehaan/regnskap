@@ -20,6 +20,11 @@ class BuildFoodBudget
      * inside that day's window. An addition day leaves the window on the same
      * day as the spending from that date.
      *
+     * Spending is transactions only: rows the bank has booked and rows added
+     * by hand or from a CSV. What the bank has reserved is reported apart, as
+     * pending_total and remaining_today_including_pending, and moves no
+     * other number.
+     *
      * @return array{
      *     timezone: string,
      *     today: string,
@@ -31,6 +36,8 @@ class BuildFoodBudget
      *     remaining_today: string,
      *     over_limit: bool,
      *     pending_review: string,
+     *     pending_total: string,
+     *     remaining_today_including_pending: string,
      *     additions: list<array{id: int, label: string, starts_on: string, ends_on: string, amount_per_day: string, days_in_window: int, amount_in_window: string}>,
      *     days: list<array{date: string, spent: string, pending_review: string, addition: string}>,
      *     rolloff: list<array{date: string, drops: string, frees: string, additions_total: string, effective_amount: string, remaining_if_no_new_spending: string}>
@@ -45,9 +52,20 @@ class BuildFoodBudget
 
         $transactions = $user->transactions()
             ->excludingSplitParents()
+            ->excludingReserved()
             ->whereDate('booked_on', '>=', $start->toDateString())
             ->whereDate('booked_on', '<=', $today->toDateString())
             ->get();
+
+        $reservedCents = 0;
+
+        $reserved = $user->pendingBankTransactions()
+            ->foodBetween($start->toDateString(), $today->toDateString())
+            ->get();
+
+        foreach ($reserved as $row) {
+            $reservedCents += abs($this->cents((string) $row->amount));
+        }
 
         /** @var Collection<string, Collection<int, Transaction>> $byDate */
         $byDate = $transactions->groupBy(
@@ -125,6 +143,8 @@ class BuildFoodBudget
             'remaining_today' => $this->fromCents($remainingCents),
             'over_limit' => $remainingCents < 0,
             'pending_review' => $this->fromCents($pendingCents),
+            'pending_total' => $this->fromCents($reservedCents),
+            'remaining_today_including_pending' => $this->fromCents($remainingCents - $reservedCents),
             'additions' => $this->additionBreakdown($additions, array_keys($additionByDate)),
             'days' => $days,
             'rolloff' => $rolloff,

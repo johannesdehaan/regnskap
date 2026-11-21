@@ -6,8 +6,10 @@ use App\Enums\Category;
 use App\Enums\FoodRuleEffect;
 use App\Enums\FoodRuleMatch;
 use App\Models\CategoryRule;
+use App\Models\PendingBankTransaction;
 use App\Models\Transaction;
 use Flux\Flux;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -72,6 +74,18 @@ new #[Title('Innboks')] class extends Component
     public function remaining(): int
     {
         return Auth::user()->transactions()->inbox()->count();
+    }
+
+    /**
+     * @return Collection<int, PendingBankTransaction>
+     */
+    #[Computed]
+    public function reserved(): Collection
+    {
+        return Auth::user()->pendingBankTransactions()
+            ->orderByDesc('booked_on')
+            ->orderByDesc('id')
+            ->get();
     }
 
     #[Computed]
@@ -266,4 +280,6 @@ new #[Title('Innboks')] class extends Component
             <flux:button :href="route('transactions.import')" wire:navigate variant="subtle">{{ __('Import') }}</flux:button>
         </div>
     @endif
+
+    <x-reserved-bank-rows :rows="$this->reserved" />
 </div>

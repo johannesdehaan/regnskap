@@ -7,6 +7,7 @@ use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Models\BankConnection;
 use App\Models\User;
+use App\Services\Sparebank1\Sparebank1TransactionParser;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
@@ -346,7 +347,7 @@ test('a rotated transaction id does not create a duplicate', function () {
         ->and($user->transactions()->first()->category)->toBe(Category::Bil);
 });
 
-test('a reserved amount is updated in place when it is booked', function () {
+test('a reserved purchase becomes one transaction when the bank books it', function () {
     $user = connectedUser();
     $user->bankConnection->accounts()->where('external_key', 'use-1')->update(['sync_enabled' => true]);
 
@@ -363,11 +364,10 @@ test('a reserved amount is updated in place when it is booked', function () {
 
     $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
 
-    expect($user->transactions()->count())->toBe(1)
-        ->and($user->transactions()->first()->booking_status)->toBe(BookingStatus::Pending)
-        ->and($user->transactions()->first()->category)->toBe(Category::Dagligvarer);
+    expect($user->transactions()->count())->toBe(0)
+        ->and($user->pendingBankTransactions()->sole()->payee)->toBe('Meny');
 
-    fakeSparebank1(transactions: [
+    $booked = [
         bankTransaction([
             'id' => 'booked-id',
             'nonUniqueId' => 'different-non-unique',
@@ -377,24 +377,346 @@ test('a reserved amount is updated in place when it is booked', function () {
             'bookingStatus' => 'BOOKED',
             'date' => bankMillis('2026-11-11 09:00:00'),
         ]),
+    ];
+
+    fakeSparebank1(transactions: $booked);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $transaction = $user->transactions()->sole();
+
+    expect($transaction->external_id)->toBe('booked-id')
+        ->and($transaction->booking_status)->toBe(BookingStatus::Booked)
+        ->and($transaction->category)->toBe(Category::Dagligvarer)
+        ->and($transaction->amount)->toBe('62.40')
+        ->and($transaction->booked_on->toDateString())->toBe('2026-11-11')
+        ->and($user->pendingBankTransactions()->count())->toBe(0);
+
+    fakeSparebank1(transactions: $booked);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    expect($user->transactions()->count())->toBe(1);
+});
+
+test('reserved rows are stored only in the snapshot, and every sync replaces it', function () {
+    $user = connectedUserWithCard();
+    $token = $user->createToken('test')->plainTextToken;
+    $first = now();
+
+    fakeSparebank1(transactions: [
+        cardPurchase([
+            'id' => 'slot-0',
+            'nonUniqueId' => 'slot-0',
+            'amount' => -74.9,
+            'description' => 'KIWI 123 SENTRUM',
+            'cleanedDescription' => 'Kiwi',
+            'bookingStatus' => 'PENDING',
+        ]),
+        cardPurchase([
+            'id' => 'slot-1',
+            'nonUniqueId' => 'slot-1',
+            'bookingStatus' => 'PENDING',
+        ]),
+        cardPurchase([
+            'id' => 'slot-2',
+            'nonUniqueId' => 'slot-2',
+            'amount' => 50,
+            'description' => 'REMA 1000 RETUR',
+            'cleanedDescription' => 'Rema 1000',
+            'remoteAccountNumber' => '9999.00.00009',
+            'bookingStatus' => 'PENDING',
+        ]),
+    ]);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 0)
+        ->assertJsonPath('updated', 0)
+        ->assertJsonPath('skipped', 0)
+        ->assertJsonPath('pending', 3);
+
+    $card = $user->bankConnection->accounts()->where('external_key', 'card-1')->sole();
+    $rows = $user->pendingBankTransactions()->orderBy('id')->get();
+    $firstIds = $rows->modelKeys();
+
+    expect($user->transactions()->count())->toBe(0)
+        ->and($rows)->toHaveCount(3)
+        ->and($rows[0]->only([
+            'bank_account_id', 'external_id', 'amount', 'payee', 'note', 'type_text',
+            'remote_account_number', 'suggested_category', 'counts_as_food',
+        ]))->toBe([
+            'bank_account_id' => $card->id,
+            'external_id' => 'slot-0',
+            'amount' => '-74.90',
+            'payee' => 'Kiwi',
+            'note' => "KIWI 123 SENTRUM\nKredittkort",
+            'type_text' => 'Kredittkort',
+            'remote_account_number' => null,
+            'suggested_category' => Category::Dagligvarer,
+            'counts_as_food' => true,
+        ])
+        ->and($rows[0]->booked_on->toDateString())->toBe('2026-11-10')
+        ->and($rows[0]->last_seen_at->equalTo($first))->toBeTrue()
+        ->and($rows[1]->payee)->toBe('Bokhandel Sentrum')
+        ->and($rows[1]->amount)->toBe('-349.00')
+        ->and($rows[1]->suggested_category)->toBeNull()
+        ->and($rows[1]->counts_as_food)->toBeFalse()
+        ->and($rows[2]->payee)->toBe('Rema 1000')
+        ->and($rows[2]->amount)->toBe('50.00')
+        ->and($rows[2]->remote_account_number)->toBe('99990000009')
+        ->and($rows[2]->suggested_category)->toBe(Category::Dagligvarer)
+        ->and($rows[2]->counts_as_food)->toBeFalse();
+
+    Carbon::setTestNow(Carbon::parse('2026-11-11 18:00:00', 'Europe/Oslo'));
+
+    fakeSparebank1(transactions: [
+        cardPurchase([
+            'id' => 'slot-0',
+            'nonUniqueId' => 'slot-0',
+            'amount' => -129,
+            'description' => 'JERNVAREHANDEL',
+            'cleanedDescription' => 'Jernvarehandel',
+            'bookingStatus' => 'PENDING',
+        ]),
+    ]);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 0)
+        ->assertJsonPath('pending', 1);
+
+    $row = $user->pendingBankTransactions()->sole();
+
+    expect($user->transactions()->count())->toBe(0)
+        ->and($firstIds)->not->toContain($row->id)
+        ->and($row->external_id)->toBe('slot-0')
+        ->and($row->payee)->toBe('Jernvarehandel')
+        ->and($row->amount)->toBe('-129.00')
+        ->and($row->last_seen_at->equalTo(now()))->toBeTrue();
+
+    fakeSparebank1(transactions: []);
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('pending', 0);
+
+    expect($user->pendingBankTransactions()->count())->toBe(0)
+        ->and($user->transactions()->count())->toBe(0);
+});
+
+test('a reserved id that the bank hands to new transactions never overwrites a transaction', function () {
+    $user = connectedUser();
+    $user->bankConnection->accounts()->where('external_key', 'use-1')->update(['sync_enabled' => true]);
+    $token = $user->createToken('test')->plainTextToken;
+
+    fakeSparebank1(transactions: [
+        bankTransaction([
+            'id' => 'slot-0',
+            'nonUniqueId' => 'slot-0',
+            'amount' => -80,
+            'description' => 'KIWI',
+            'cleanedDescription' => 'Kiwi',
+        ]),
     ]);
 
     $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
 
-    $transaction = $user->transactions()->first();
+    $kiwi = $user->transactions()->sole();
 
-    expect($user->transactions()->count())->toBe(1)
-        ->and($transaction->external_id)->toBe('booked-id')
-        ->and($transaction->booking_status)->toBe(BookingStatus::Booked)
-        ->and($transaction->category)->toBe(Category::Dagligvarer)
-        ->and($transaction->amount)->toBe('62.40');
+    $this->withToken($token)
+        ->patchJson('/api/transactions/'.$kiwi->id, ['category' => 'Bil', 'note' => 'Kaffe på turen'])
+        ->assertOk();
+
+    $untouched = $kiwi->refresh()->getAttributes();
+
+    $reserved = [
+        ['amount' => 250, 'text' => 'Straksbetaling', 'stored' => '250.00'],
+        ['amount' => -75, 'text' => 'Overføring', 'stored' => '-75.00'],
+        ['amount' => -1200, 'text' => 'Betaling', 'stored' => '-1200.00'],
+    ];
+
+    foreach ($reserved as $row) {
+        fakeSparebank1(transactions: [
+            bankTransaction([
+                'id' => 'slot-0',
+                'nonUniqueId' => 'slot-0',
+                'amount' => $row['amount'],
+                'description' => $row['text'],
+                'cleanedDescription' => $row['text'],
+                'typeText' => $row['text'],
+                'remoteAccountNumber' => '9999.00.00009',
+                'bookingStatus' => 'PENDING',
+            ]),
+        ]);
+
+        $this->withToken($token)
+            ->postJson('/api/sparebank1/sync')
+            ->assertOk()
+            ->assertJsonPath('imported', 0)
+            ->assertJsonPath('updated', 0)
+            ->assertJsonPath('pending', 1);
+
+        $snapshot = $user->pendingBankTransactions()->sole();
+
+        expect($user->transactions()->count())->toBe(1)
+            ->and($kiwi->refresh()->getAttributes())->toBe($untouched)
+            ->and($snapshot->payee)->toBe($row['text'])
+            ->and($snapshot->amount)->toBe($row['stored']);
+    }
+
+    fakeSparebank1(transactions: array_map(fn (array $row, int $index): array => bankTransaction([
+        'id' => 'booked-'.$index,
+        'nonUniqueId' => 'booked-row-'.$index,
+        'amount' => $row['amount'],
+        'description' => $row['text'],
+        'cleanedDescription' => $row['text'],
+        'typeText' => $row['text'],
+        'remoteAccountNumber' => '9999.00.00009',
+    ]), $reserved, array_keys($reserved)));
+
+    $this->withToken($token)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('imported', 3)
+        ->assertJsonPath('updated', 0)
+        ->assertJsonPath('pending', 0);
+
+    expect($user->transactions()->count())->toBe(4)
+        ->and($kiwi->refresh()->getAttributes())->toBe($untouched)
+        ->and($user->transactions()->where('booking_status', BookingStatus::Booked->value)->count())->toBe(4)
+        ->and($user->transactions()->whereKeyNot($kiwi->id)->orderBy('id')->get()->map->only(['external_id', 'payee', 'amount'])->all())->toBe([
+            ['external_id' => 'booked-0', 'payee' => 'Straksbetaling', 'amount' => '250.00'],
+            ['external_id' => 'booked-1', 'payee' => 'Overføring', 'amount' => '75.00'],
+            ['external_id' => 'booked-2', 'payee' => 'Betaling', 'amount' => '1200.00'],
+        ])
+        ->and($user->pendingBankTransactions()->count())->toBe(0);
+});
+
+test('a row an earlier version imported as reserved is left alone when the bank books it', function () {
+    $user = connectedUser();
+    $account = $user->bankConnection->accounts()->where('external_key', 'use-1')->sole();
+    $account->update(['sync_enabled' => true]);
+
+    $bankRow = bankTransaction([
+        'id' => 'legacy-id',
+        'nonUniqueId' => 'legacy-row',
+        'amount' => -410,
+        'description' => 'Betaling',
+        'cleanedDescription' => 'Betaling',
+    ]);
+
+    $legacy = $user->transactions()->create([
+        'external_id' => 'legacy-id',
+        'dedupe_key' => app(Sparebank1TransactionParser::class)->parse('use-1', $bankRow)->dedupeKey,
+        'bank_account_id' => $account->id,
+        'booking_status' => BookingStatus::Pending,
+        'booked_on' => '2026-11-09',
+        'amount' => '95.00',
+        'payee' => 'Straksbetaling',
+        'category' => Category::Annet,
+        'note' => 'Satt for hånd',
+        'needs_review' => false,
+        'exclude_from_budget' => true,
+    ]);
+
+    $kept = $legacy->refresh()->only(['booking_status', 'booked_on', 'amount', 'payee', 'category', 'note', 'needs_review', 'exclude_from_budget']);
+
+    fakeSparebank1(transactions: [$bankRow]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    $booked = $user->transactions()->where('external_id', 'legacy-id')->sole();
+
+    expect($user->transactions()->count())->toBe(2)
+        ->and($booked->id)->not->toBe($legacy->id)
+        ->and($booked->booking_status)->toBe(BookingStatus::Booked)
+        ->and($booked->amount)->toBe('410.00')
+        ->and($booked->payee)->toBe('Betaling')
+        ->and($booked->note)->not->toBe('Satt for hånd')
+        ->and($legacy->refresh()->only(array_keys($kept)))->toEqual($kept)
+        ->and($legacy->external_id)->toBeNull()
+        ->and($legacy->dedupe_key)->toBeNull();
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    expect($user->transactions()->count())->toBe(2);
+});
+
+test('the snapshot stays when the bank could not fetch its recent rows', function () {
+    $user = connectedUserWithCard();
+    $first = now();
+
+    fakeSparebank1(transactions: [cardPurchase(['bookingStatus' => 'PENDING'])]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    Carbon::setTestNow(Carbon::parse('2026-11-11 18:00:00', 'Europe/Oslo'));
+
+    fakeSparebank1(transactions: [], errors: ['RECENT_TRANSACTIONS_FAILED']);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/sparebank1/sync')
+        ->assertOk()
+        ->assertJsonPath('pending', 1);
+
+    $row = $user->pendingBankTransactions()->sole();
+
+    expect($row->payee)->toBe('Bokhandel Sentrum')
+        ->and($row->last_seen_at->equalTo($first))->toBeTrue()
+        ->and($user->bankConnection()->first()->last_sync_error)->toBe('Nylige transaksjoner kunne ikke hentes.');
+});
+
+test('the snapshot is dropped for an account that stops syncing and when the bank is disconnected', function () {
+    $user = connectedUserWithCard();
+    $accounts = $user->bankConnection->accounts();
+    $accounts->where('external_key', 'use-1')->update(['sync_enabled' => true]);
+
+    fakeSparebank1(transactions: [cardPurchase(['bookingStatus' => 'PENDING'])]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    expect($user->pendingBankTransactions()->count())->toBe(2);
+
+    $card = $user->bankConnection->accounts()->where('external_key', 'card-1')->sole();
+    $card->update(['sync_enabled' => false]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    expect($user->pendingBankTransactions()->pluck('bank_account_id')->all())->not->toContain($card->id)
+        ->and($user->pendingBankTransactions()->count())->toBe(1);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::settings.bank')->call('disconnect');
+
+    expect($user->pendingBankTransactions()->count())->toBe(0);
+});
+
+test('a sync without any enabled account empties the snapshot', function () {
+    $user = connectedUserWithCard();
+
+    fakeSparebank1(transactions: [cardPurchase(['bookingStatus' => 'PENDING'])]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
+
+    expect($user->pendingBankTransactions()->count())->toBe(1);
+
+    $user->bankConnection->accounts()->update(['sync_enabled' => false]);
+
+    $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertFailed();
+
+    expect($user->pendingBankTransactions()->count())->toBe(0);
 });
 
 test('a new bank row gets its defaults from the food rules, the bank text and the account', function () {
     $user = connectedUserWithCard();
 
     fakeSparebank1(transactions: [
-        pendingCardPurchase(),
+        cardPurchase(),
         bankTransaction([
             'id' => 'card-kiwi',
             'nonUniqueId' => 'card-kiwi-row',
@@ -412,10 +734,10 @@ test('a new bank row gets its defaults from the food rules, the bank text and th
         ->assertJsonPath('imported', 2)
         ->assertJsonPath('updated', 0);
 
-    $unknown = $user->transactions()->where('external_id', 'card-pending')->sole();
+    $unknown = $user->transactions()->where('external_id', 'card-first')->sole();
     $grocery = $user->transactions()->where('external_id', 'card-kiwi')->sole();
 
-    expect($unknown->booking_status)->toBe(BookingStatus::Pending)
+    expect($unknown->booking_status)->toBe(BookingStatus::Booked)
         ->and($unknown->amount)->toBe('349.00')
         ->and($unknown->booked_on->toDateString())->toBe('2026-11-10')
         ->and($unknown->payee)->toBe('Bokhandel Sentrum')
@@ -437,11 +759,11 @@ test('a new bank row gets its defaults from the food rules, the bank text and th
         ->and($grocery->payment_method)->toBe(PaymentMethod::Kredittkort);
 });
 
-test('a later sync updates the bank fields on a pending row and keeps manual edits', function (array $edits) {
+test('a later sync updates the bank fields on a booked row and keeps manual edits', function (array $edits) {
     $user = connectedUserWithCard();
     $token = $user->createToken('test')->plainTextToken;
 
-    fakeSparebank1(transactions: [pendingCardPurchase()]);
+    fakeSparebank1(transactions: [cardPurchase()]);
 
     $this->withToken($token)
         ->postJson('/api/sparebank1/sync')
@@ -465,16 +787,15 @@ test('a later sync updates the bank fields on a pending row and keeps manual edi
         ->assertJsonPath('skipped', 1);
 
     expect($row->refresh()->only(manualTransactionFields()))->toBe($edited)
-        ->and($row->booking_status)->toBe(BookingStatus::Pending)
+        ->and($row->booking_status)->toBe(BookingStatus::Booked)
         ->and($row->amount)->toBe('349.00');
 
     fakeSparebank1(transactions: [
-        pendingCardPurchase([
-            'id' => 'card-booked',
+        cardPurchase([
+            'id' => 'card-rotated',
             'amount' => -352.5,
             'description' => 'BOKHANDEL SENTRUM OSLO',
             'cleanedDescription' => 'Bokhandel Sentrum Oslo',
-            'bookingStatus' => 'BOOKED',
             'date' => bankMillis('2026-11-11 09:00:00'),
         ]),
     ]);
@@ -491,7 +812,7 @@ test('a later sync updates the bank fields on a pending row and keeps manual edi
         ->and($row->amount)->toBe('352.50')
         ->and($row->booked_on->toDateString())->toBe('2026-11-11')
         ->and($row->payee)->toBe('Bokhandel Sentrum Oslo')
-        ->and($row->external_id)->toBe('card-booked');
+        ->and($row->external_id)->toBe('card-rotated');
 })->with([
     'excluded and reviewed, still without a category' => [[
         'exclude_from_budget' => true,
@@ -513,14 +834,13 @@ test('a later sync does not move a hand-categorized transfer back outside the bu
     $user->bankConnection->accounts()->where('external_key', 'use-1')->update(['sync_enabled' => true]);
     $token = $user->createToken('test')->plainTextToken;
     $transfer = [
-        'id' => 'transfer-pending',
+        'id' => 'transfer-first',
         'nonUniqueId' => 'transfer-row',
         'amount' => -1500,
         'description' => 'Overføring',
         'cleanedDescription' => 'Overføring',
         'typeText' => 'Overføring',
         'remoteAccountNumber' => '1200.00.00003',
-        'bookingStatus' => 'PENDING',
     ];
 
     fakeSparebank1(transactions: [bankTransaction($transfer)]);
@@ -542,7 +862,7 @@ test('a later sync does not move a hand-categorized transfer back outside the bu
         ->assertOk();
 
     fakeSparebank1(transactions: [
-        bankTransaction(array_merge($transfer, ['id' => 'transfer-booked', 'bookingStatus' => 'BOOKED'])),
+        bankTransaction(array_merge($transfer, ['id' => 'transfer-rotated'])),
     ]);
 
     $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
@@ -551,7 +871,7 @@ test('a later sync does not move a hand-categorized transfer back outside the bu
 
     expect($user->transactions()->count())->toBe(1)
         ->and($row->booking_status)->toBe(BookingStatus::Booked)
-        ->and($row->external_id)->toBe('transfer-booked')
+        ->and($row->external_id)->toBe('transfer-rotated')
         ->and($row->category)->toBe(Category::Bokostnader)
         ->and($row->exclude_from_budget)->toBeFalse()
         ->and($row->needs_review)->toBeFalse()
@@ -562,7 +882,7 @@ test('a later sync only refreshes the bank fields on a split and leaves its line
     $user = connectedUserWithCard();
     $token = $user->createToken('test')->plainTextToken;
 
-    fakeSparebank1(transactions: [pendingCardPurchase()]);
+    fakeSparebank1(transactions: [cardPurchase()]);
 
     $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
 
@@ -589,7 +909,7 @@ test('a later sync only refreshes the bank fields on a split and leaves its line
         ->and($lines)->toHaveCount(2);
 
     fakeSparebank1(transactions: [
-        pendingCardPurchase(['id' => 'card-booked', 'bookingStatus' => 'BOOKED']),
+        cardPurchase(['id' => 'card-rotated']),
     ]);
 
     $this->artisan('sparebank1:sync', ['--user' => $user->id])->assertSuccessful();
@@ -597,7 +917,7 @@ test('a later sync only refreshes the bank fields on a split and leaves its line
     $parent->refresh();
 
     expect($parent->booking_status)->toBe(BookingStatus::Booked)
-        ->and($parent->external_id)->toBe('card-booked')
+        ->and($parent->external_id)->toBe('card-rotated')
         ->and($parent->amount)->toBe('349.00')
         ->and($parent->only(manualTransactionFields()))->toBe($edited)
         ->and($parent->children()->orderBy('id')->get()->toArray())->toBe($lines)
@@ -723,12 +1043,12 @@ test('a missing expires_in falls back to the documented ten minute access token'
     expect(abs($user->bankConnection->access_token_expires_at->diffInSeconds(now()->addSeconds(540))))->toBeLessThan(5);
 });
 
-function fakeSparebank1(array $token = [], ?array $transactions = null): void
+function fakeSparebank1(array $token = [], ?array $transactions = null, array $errors = []): void
 {
     Http::swap(new Factory);
     Http::preventStrayRequests();
 
-    Http::fake(function (Request $request) use ($token, $transactions) {
+    Http::fake(function (Request $request) use ($token, $transactions, $errors) {
         if (str_contains($request->url(), '/oauth/token')) {
             return Http::response(array_merge([
                 'access_token' => 'access-token-plaintext',
@@ -741,7 +1061,7 @@ function fakeSparebank1(array $token = [], ?array $transactions = null): void
         if (str_contains($request->url(), '/personal/banking/transactions')) {
             return Http::response([
                 'transactions' => $transactions ?? [],
-                'errors' => [],
+                'errors' => $errors,
             ]);
         }
 
@@ -809,15 +1129,14 @@ function bankTransaction(array $overrides = []): array
  * @param  array<string, mixed>  $overrides
  * @return array<string, mixed>
  */
-function pendingCardPurchase(array $overrides = []): array
+function cardPurchase(array $overrides = []): array
 {
     return bankTransaction(array_merge([
-        'id' => 'card-pending',
+        'id' => 'card-first',
         'nonUniqueId' => 'card-row',
         'amount' => -349,
         'description' => 'Bokhandel Sentrum',
         'cleanedDescription' => 'Bokhandel Sentrum',
-        'bookingStatus' => 'PENDING',
         'accountKey' => 'card-1',
         'typeText' => 'Kredittkort',
     ], $overrides));
