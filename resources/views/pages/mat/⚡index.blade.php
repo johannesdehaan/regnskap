@@ -256,7 +256,7 @@ new #[Title('Matbudsjett')] class extends Component
                     <div class="rounded-xl border border-zinc-200 px-3 py-2 dark:border-zinc-700" data-test="food-rolloff">
                         <div class="flex items-baseline justify-between gap-3">
                             <p class="text-sm">{{ $this->dayLabel($step['date']) }}</p>
-                            <p class="text-sm font-semibold tabular-nums">+ {{ $this->kroner($step['frees']) }} kr</p>
+                            <p class="text-sm font-semibold tabular-nums">{{ str_starts_with($step['frees'], '-') ? '-' : '+' }} {{ $this->kroner(ltrim($step['frees'], '-')) }} kr</p>
                         </div>
                         <flux:text class="text-xs">
                             {{ __('Utgiftene fra :from faller ut. Da kan du bruke :left kr.', [

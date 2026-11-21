@@ -502,6 +502,43 @@ test('a negative food line lowers the food budget and the category totals', func
         ->assertDontSee('90,00');
 });
 
+test('a day with only a negative food line counts below zero and rolls off as a minus', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-13 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $parent = Transaction::factory()->for($user)->create([
+        'payee' => 'Kiwi',
+        'amount' => '30.00',
+        'booked_on' => '2026-11-12',
+        'category' => Category::Dagligvarer,
+        'needs_review' => false,
+    ]);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => '40.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '-10.00'],
+            ],
+        ])
+        ->assertOk();
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['spent'])->toBe('-10.00')
+        ->and($status['remaining_today'])->toBe('1410.00')
+        ->and($status['days'][5]['spent'])->toBe('-10.00')
+        ->and($status['rolloff'][5]['drops'])->toBe('2026-11-12')
+        ->and($status['rolloff'][5]['frees'])->toBe('-10.00')
+        ->and($status['rolloff'][5]['remaining_if_no_new_spending'])->toBe('1400.00');
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::mat.index')
+        ->assertSee('- 10 kr')
+        ->assertDontSee('+ -10 kr');
+});
+
 test('the transaction list shows subcategories and does not double count a split parent', function () {
     $this->travelTo(CarbonImmutable::parse('2026-11-13 10:00:00', 'Europe/Oslo'));
 
