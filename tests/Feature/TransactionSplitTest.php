@@ -135,6 +135,90 @@ test('a split whose lines do not sum to the parent is rejected and keeps existin
         ->and($parent->children()->where('note', 'beholdes')->exists())->toBeTrue();
 });
 
+test('a split stores a negative line for a discount on another subcategory', function () {
+    $user = User::factory()->create();
+    $parent = Transaction::factory()->for($user)->create([
+        'amount' => '90.00',
+        'payee' => 'Kiwi',
+        'booked_on' => '2026-11-13',
+    ]);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Boller og brus', 'amount' => '100.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => -10, 'note' => 'bonus'],
+            ],
+        ])
+        ->assertOk()
+        ->assertJsonCount(2, 'children')
+        ->assertJsonPath('children.0.amount', '100.00')
+        ->assertJsonPath('children.1.subcategory', 'Matvarer')
+        ->assertJsonPath('children.1.amount', '-10.00')
+        ->assertJsonPath('children.1.note', 'bonus');
+
+    $children = $parent->children()->orderBy('id')->get();
+
+    expect($children->pluck('amount')->all())->toBe(['100.00', '-10.00'])
+        ->and($children->sum(fn (Transaction $child): int => (int) round(((float) $child->amount) * 100)))->toBe(9000);
+});
+
+test('a split with a negative line must still sum to a positive parent amount', function () {
+    $user = User::factory()->create();
+    $parent = Transaction::factory()->for($user)->create([
+        'amount' => '90.00',
+        'booked_on' => '2026-11-13',
+    ]);
+    $refund = Transaction::factory()->for($user)->create([
+        'amount' => '-50.00',
+        'booked_on' => '2026-11-13',
+    ]);
+    $token = $user->createToken('test')->plainTextToken;
+
+    $this->withToken($token)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Boller og brus', 'amount' => '100.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '-10.01'],
+            ],
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('lines');
+
+    $this->withToken($token)
+        ->postJson('/api/transactions/'.$refund->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '-60.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => '10.00'],
+            ],
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('lines');
+
+    expect($parent->children()->count())->toBe(0)
+        ->and($refund->children()->count())->toBe(0);
+});
+
+test('a line of zero is rejected', function (string|int $zero) {
+    $user = User::factory()->create();
+    $parent = Transaction::factory()->for($user)->create([
+        'amount' => '90.00',
+        'booked_on' => '2026-11-13',
+    ]);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '90.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => $zero],
+            ],
+        ])
+        ->assertUnprocessable()
+        ->assertJsonValidationErrors('lines.1.amount');
+
+    expect($parent->children()->count())->toBe(0);
+})->with([0, '0.00', '-0.00', '0.004']);
+
 test('a subcategory must belong to the line category', function () {
     $user = User::factory()->create();
     $parent = Transaction::factory()->for($user)->create([
@@ -369,6 +453,90 @@ test('food budget and monthly overview count split children and treat husholdnin
         ->getJson('/api/overview?month=2026-11')
         ->assertOk()
         ->assertJsonPath('spent', 245);
+});
+
+test('a negative food line lowers the food budget and the category totals', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-13 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $token = $user->createToken('test')->plainTextToken;
+    $parent = Transaction::factory()->for($user)->create([
+        'payee' => 'Kiwi',
+        'amount' => '90.00',
+        'booked_on' => '2026-11-13',
+        'category' => Category::Dagligvarer,
+        'needs_review' => false,
+    ]);
+
+    $this->withToken($token)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Boller og brus', 'amount' => '60.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => '40.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '-10.00', 'note' => 'bonus'],
+            ],
+        ])
+        ->assertOk();
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['spent'])->toBe('50.00')
+        ->and($status['remaining_today'])->toBe('1350.00')
+        ->and($status['days'][6]['spent'])->toBe('50.00');
+
+    $this->withToken($token)
+        ->getJson('/api/food-budget')
+        ->assertOk()
+        ->assertJsonPath('spent', '50.00');
+
+    $overview = app(BuildOverview::class)($user, '2026-11');
+
+    expect($overview['spent'])->toBe(90.0)
+        ->and(collect($overview['rows'])->firstWhere('name', 'Dagligvarer')['spent'])->toBe(90.0);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::transactions.index')
+        ->set('month', '2026-11')
+        ->assertSee('-10,00')
+        ->assertDontSee('90,00');
+});
+
+test('a day with only a negative food line counts below zero and rolls off as a minus', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-13 10:00:00', 'Europe/Oslo'));
+
+    $user = User::factory()->create();
+    $parent = Transaction::factory()->for($user)->create([
+        'payee' => 'Kiwi',
+        'amount' => '30.00',
+        'booked_on' => '2026-11-12',
+        'category' => Category::Dagligvarer,
+        'needs_review' => false,
+    ]);
+
+    $this->withToken($user->createToken('test')->plainTextToken)
+        ->postJson('/api/transactions/'.$parent->id.'/split', [
+            'lines' => [
+                ['category' => 'Dagligvarer', 'subcategory' => 'Husholdning', 'amount' => '40.00'],
+                ['category' => 'Dagligvarer', 'subcategory' => 'Matvarer', 'amount' => '-10.00'],
+            ],
+        ])
+        ->assertOk();
+
+    $status = app(BuildFoodBudget::class)($user);
+
+    expect($status['spent'])->toBe('-10.00')
+        ->and($status['remaining_today'])->toBe('1410.00')
+        ->and($status['days'][5]['spent'])->toBe('-10.00')
+        ->and($status['rolloff'][5]['drops'])->toBe('2026-11-12')
+        ->and($status['rolloff'][5]['frees'])->toBe('-10.00')
+        ->and($status['rolloff'][5]['remaining_if_no_new_spending'])->toBe('1400.00');
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::mat.index')
+        ->assertSee('- 10 kr')
+        ->assertDontSee('+ -10 kr');
 });
 
 test('the transaction list shows subcategories and does not double count a split parent', function () {

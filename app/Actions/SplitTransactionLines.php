@@ -13,6 +13,8 @@ class SplitTransactionLines
     /**
      * Replace the children of a bank transaction with receipt lines.
      * Amounts are compared in øre and must match the parent exactly.
+     * A line may be negative, for a discount or a redeemed store bonus,
+     * but never zero, and the lines must add up to a positive amount.
      * Children stay free of bank identifiers so SpareBank 1 dedupe keeps
      * matching the parent row.
      *
@@ -104,6 +106,13 @@ class SplitTransactionLines
             }
 
             $cents = $this->toCents($line['amount']);
+
+            if ($cents === 0) {
+                throw ValidationException::withMessages([
+                    "lines.$index.amount" => 'Delbeløpet kan ikke være 0.',
+                ]);
+            }
+
             $sum += $cents;
             $normalized[] = [
                 'category' => $line['category'],
@@ -116,6 +125,12 @@ class SplitTransactionLines
         if ($sum !== $this->toCents((string) $parent->amount)) {
             throw ValidationException::withMessages([
                 'lines' => 'Delbeløpene må summeres nøyaktig til transaksjonens beløp.',
+            ]);
+        }
+
+        if ($sum <= 0) {
+            throw ValidationException::withMessages([
+                'lines' => 'Summen av delbeløpene må være større enn 0.',
             ]);
         }
 

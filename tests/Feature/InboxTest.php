@@ -130,6 +130,39 @@ test('a split creates two children whose amounts sum to the original', function 
     expect($user->transactions()->inbox()->count())->toBe(0);
 });
 
+test('an inbox split can have a negative part but no part of zero', function () {
+    $user = User::factory()->create();
+    $transaction = Transaction::factory()->for($user)->create([
+        'amount' => '90.00',
+        'payee' => 'Kiwi Test',
+        'category' => null,
+    ]);
+
+    $this->actingAs($user);
+
+    Livewire::test('pages::inbox')
+        ->set('splitCategoryA', Category::Dagligvarer->value)
+        ->set('splitCategoryB', Category::BollerOgBrus->value)
+        ->set('splitAmount', '0')
+        ->call('split')
+        ->assertHasErrors('splitAmount')
+        ->set('splitAmount', '90.00')
+        ->call('split')
+        ->assertHasErrors('splitAmount');
+
+    expect($transaction->children()->count())->toBe(0);
+
+    Livewire::test('pages::inbox')
+        ->set('splitCategoryA', Category::Dagligvarer->value)
+        ->set('splitCategoryB', Category::BollerOgBrus->value)
+        ->set('splitAmount', '-10.00')
+        ->call('split')
+        ->assertHasNoErrors();
+
+    expect($transaction->children()->orderBy('id')->pluck('amount')->all())->toBe(['-10.00', '100.00'])
+        ->and($user->transactions()->inbox()->count())->toBe(0);
+});
+
 test('csv import creates uncategorized transactions and skips duplicates', function () {
     Storage::fake('local');
 
