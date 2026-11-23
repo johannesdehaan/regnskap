@@ -743,7 +743,7 @@ function receiptSplitAccount(User $user): BankAccount
         'account_number' => '12345678901',
         'account_type' => 'Brukskonto',
         'currency_code' => 'NOK',
-        'payment_method' => PaymentMethod::Brukskonto,
+        'payment_method' => PaymentMethod::BrukskontoSmn,
         'sync_enabled' => true,
     ]);
 }
