@@ -3,6 +3,7 @@
 use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Models\Transaction;
+use App\Support\AccountNumbers;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
@@ -62,7 +63,7 @@ new #[Title('Transaksjoner')] class extends Component
     #[Computed]
     public function transactions(): LengthAwarePaginator
     {
-        $query = Auth::user()->transactions()->excludingSplitParents()->orderByDesc('booked_on')->orderByDesc('id');
+        $query = Auth::user()->transactions()->with('parent')->excludingSplitParents()->orderByDesc('booked_on')->orderByDesc('id');
 
         if ($this->month !== '' && preg_match('/^\d{4}-\d{2}$/', $this->month) === 1) {
             $start = $this->month.'-01';
@@ -86,6 +87,12 @@ new #[Title('Transaksjoner')] class extends Component
         }
 
         return $query->paginate(20);
+    }
+
+    #[Computed]
+    public function accountNumbers(): AccountNumbers
+    {
+        return new AccountNumbers(Auth::user());
     }
 
     public function toggleExcluded(int $id): void
@@ -118,7 +125,7 @@ new #[Title('Transaksjoner')] class extends Component
         <flux:select wire:model.live="payment_method" :label="__('Betalingsmåte')">
             <option value="">{{ __('Alle') }}</option>
             @foreach (\App\Enums\PaymentMethod::cases() as $method)
-                <option value="{{ $method->value }}">{{ $method->value }}</option>
+                <option value="{{ $method->value }}">{{ $this->accountNumbers->label($method) }}</option>
             @endforeach
         </flux:select>
     </div>
@@ -137,7 +144,7 @@ new #[Title('Transaksjoner')] class extends Component
                         · {{ $transaction->subcategory->value }}
                     @endif
                     @if ($transaction->payment_method)
-                        · {{ $transaction->payment_method->value }}
+                        · {{ $this->accountNumbers->transactionLabel($transaction) }}
                     @endif
                 </flux:text>
                 @if ($transaction->note)

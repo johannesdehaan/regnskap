@@ -94,6 +94,8 @@ class NonFoodMovement
             $names[] = FoodText::normalize($method->value);
         }
 
+        $names[] = FoodText::normalize(PaymentMethod::SHARED_BRUKSKONTO_NAME);
+
         return array_values(array_unique(array_filter($names)));
     }
 }

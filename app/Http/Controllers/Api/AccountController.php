@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Support\AccountNumbers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -13,8 +14,12 @@ class AccountController extends Controller
     {
         $this->authorize('viewAny', Account::class);
 
+        $user = $this->user($request);
+        $numbers = new AccountNumbers($user);
+
         return response()->json(
-            $this->user($request)->accounts()->orderBy('name')->get(),
+            $user->accounts()->orderBy('name')->get()
+                ->map(fn (Account $account): array => $this->withNumber($account, $numbers)),
         );
     }
 
@@ -22,9 +27,10 @@ class AccountController extends Controller
     {
         $this->authorize('create', Account::class);
 
-        $account = $this->user($request)->accounts()->create($this->payload($request));
+        $user = $this->user($request);
+        $account = $user->accounts()->create($this->payload($request));
 
-        return response()->json($account, 201);
+        return response()->json($this->withNumber($account, new AccountNumbers($user)), 201);
     }
 
     public function update(Request $request, Account $account): JsonResponse
@@ -33,7 +39,7 @@ class AccountController extends Controller
 
         $account->update($this->payload($request, updating: true));
 
-        return response()->json($account->refresh());
+        return response()->json($this->withNumber($account->refresh(), new AccountNumbers($this->user($request))));
     }
 
     public function destroy(Account $account): JsonResponse
@@ -43,6 +49,20 @@ class AccountController extends Controller
         $account->delete();
 
         return response()->json(status: 204);
+    }
+
+    /**
+     * The stored fields, and account_display_number: the number of the synced
+     * bank account whose payment method has the same name as this account.
+     *
+     * @return array<string, mixed>
+     */
+    private function withNumber(Account $account, AccountNumbers $numbers): array
+    {
+        return [
+            ...$account->attributesToArray(),
+            'account_display_number' => $numbers->forName($account->name),
+        ];
     }
 
     /**

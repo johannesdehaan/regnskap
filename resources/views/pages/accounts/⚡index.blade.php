@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Account;
+use App\Support\AccountNumbers;
 use Flux\Flux;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -28,6 +29,16 @@ new #[Title('Kontoer')] class extends Component
     public function accounts(): Collection
     {
         return Auth::user()->accounts()->orderBy('name')->get();
+    }
+
+    /**
+     * An account named like a payment method that a synced bank account is
+     * mapped to is listed with that bank account's number.
+     */
+    #[Computed]
+    public function accountNumbers(): AccountNumbers
+    {
+        return new AccountNumbers(Auth::user());
     }
 
     public function edit(int $id): void
@@ -109,7 +120,7 @@ new #[Title('Kontoer')] class extends Component
         @forelse ($this->accounts as $account)
             <div class="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
                 <div>
-                    <flux:heading size="sm">{{ $account->name }}</flux:heading>
+                    <flux:heading size="sm">{{ $this->accountNumbers->label($account->name) }}</flux:heading>
                     <flux:text class="text-sm">{{ $account->type }}</flux:text>
                 </div>
                 <div class="flex gap-2">

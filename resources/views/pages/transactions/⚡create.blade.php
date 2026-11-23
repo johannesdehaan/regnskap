@@ -5,10 +5,12 @@ use App\Enums\Category;
 use App\Enums\PaymentMethod;
 use App\Enums\Subcategory;
 use App\Models\Transaction;
+use App\Support\AccountNumbers;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -34,6 +36,12 @@ new #[Title('Ny transaksjon')] class extends Component
     {
         $this->authorize('create', Transaction::class);
         $this->booked_on = now()->toDateString();
+    }
+
+    #[Computed]
+    public function accountNumbers(): AccountNumbers
+    {
+        return new AccountNumbers(Auth::user());
     }
 
     public function save(): void
@@ -111,7 +119,7 @@ new #[Title('Ny transaksjon')] class extends Component
         <flux:select wire:model="payment_method" :label="__('Betalingsmåte')">
             <option value="">{{ __('Ikke valgt') }}</option>
             @foreach (\App\Enums\PaymentMethod::cases() as $method)
-                <option value="{{ $method->value }}">{{ $method->value }}</option>
+                <option value="{{ $method->value }}">{{ $this->accountNumbers->label($method) }}</option>
             @endforeach
         </flux:select>
         <flux:textarea wire:model="note" :label="__('Notat')" rows="3" />
