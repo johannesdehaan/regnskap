@@ -8,6 +8,7 @@ use App\Enums\FoodRuleMatch;
 use App\Models\CategoryRule;
 use App\Models\PendingBankTransaction;
 use App\Models\Transaction;
+use App\Support\AccountNumbers;
 use Flux\Flux;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -68,6 +69,12 @@ new #[Title('Innboks')] class extends Component
         }
 
         return $transaction;
+    }
+
+    #[Computed]
+    public function accountNumbers(): AccountNumbers
+    {
+        return new AccountNumbers(Auth::user());
     }
 
     #[Computed]
@@ -206,7 +213,7 @@ new #[Title('Innboks')] class extends Component
                     · {{ $this->transaction->subcategory->value }}
                 @endif
                 @if ($this->transaction->payment_method)
-                    · {{ $this->transaction->payment_method->value }}
+                    · {{ $this->accountNumbers->transactionLabel($this->transaction) }}
                 @endif
             </flux:text>
             @if ($this->transaction->children()->exists())

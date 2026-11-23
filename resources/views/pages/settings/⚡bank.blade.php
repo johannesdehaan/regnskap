@@ -6,10 +6,12 @@ use App\Enums\PaymentMethod;
 use App\Exceptions\Sparebank1Exception;
 use App\Models\BankAccount;
 use App\Services\Sparebank1\Sparebank1Client;
+use App\Support\AccountNumbers;
 use App\Support\Sparebank1Banks;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\Rule;
+use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
@@ -43,6 +45,16 @@ new #[Title('Bank')] class extends Component
         $this->credentialsReady = $client->configured();
         $this->redirectUri = $client->redirectUri();
         $this->loadConnection();
+    }
+
+    /**
+     * A payment method that a synced account is mapped to is listed with that
+     * account's number, so it shows when a method is already taken.
+     */
+    #[Computed]
+    public function accountNumbers(): AccountNumbers
+    {
+        return new AccountNumbers(Auth::user());
     }
 
     public function saveAccounts(): void
@@ -209,17 +221,12 @@ new #[Title('Bank')] class extends Component
                     <flux:heading size="sm">{{ __('Kontoer') }}</flux:heading>
                     @foreach ($accountRows as $index => $account)
                         <div class="space-y-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700" wire:key="bank-account-{{ $account['id'] }}">
-                            <div>
-                                <flux:heading size="sm">{{ $account['name'] }}</flux:heading>
-                                @if ($account['number'] !== '')
-                                    <flux:text class="text-sm">{{ $account['number'] }}</flux:text>
-                                @endif
-                            </div>
+                            <flux:heading size="sm">{{ AccountNumbers::join($account['name'], $account['number']) }}</flux:heading>
                             <flux:checkbox wire:model="accountRows.{{ $index }}.sync_enabled" :label="__('Synkroniser denne kontoen')" />
                             <flux:select wire:model="accountRows.{{ $index }}.payment_method" :label="__('Betalingsmåte')">
                                 <option value="">{{ __('Ikke valgt') }}</option>
                                 @foreach (PaymentMethod::cases() as $method)
-                                    <option value="{{ $method->value }}">{{ $method->value }}</option>
+                                    <option value="{{ $method->value }}">{{ $this->accountNumbers->label($method) }}</option>
                                 @endforeach
                             </flux:select>
                         </div>

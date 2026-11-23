@@ -10,6 +10,7 @@ use App\Enums\PaymentMethod;
 use App\Enums\Subcategory;
 use App\Http\Controllers\Controller;
 use App\Models\Transaction;
+use App\Support\AccountNumbers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -32,7 +33,8 @@ class TransactionController extends Controller
             'booking_status' => ['nullable', Rule::enum(BookingStatus::class)],
         ]);
 
-        $query = $this->user($request)->transactions()->orderByDesc('booked_on')->orderByDesc('id');
+        $user = $this->user($request);
+        $query = $user->transactions()->with('parent')->orderByDesc('booked_on')->orderByDesc('id');
         $bookingStatus = $validated['booking_status'] ?? null;
 
         // Only bank rows have a booking status, and a split bank row is the
@@ -68,7 +70,11 @@ class TransactionController extends Controller
             });
         }
 
-        return response()->json($query->get());
+        $numbers = new AccountNumbers($user);
+
+        return response()->json(
+            $query->get()->map(fn (Transaction $transaction): array => $this->payload($transaction, $numbers)),
+        );
     }
 
     public function store(Request $request): JsonResponse
@@ -122,9 +128,10 @@ class TransactionController extends Controller
             $subcategory instanceof Subcategory ? $subcategory : null,
         );
 
-        $transaction = $this->user($request)->transactions()->create($validated);
+        $user = $this->user($request);
+        $transaction = $user->transactions()->create($validated);
 
-        return response()->json($transaction, 201);
+        return response()->json($this->payload($transaction, new AccountNumbers($user)), 201);
     }
 
     public function update(Request $request, Transaction $transaction): JsonResponse
@@ -169,7 +176,7 @@ class TransactionController extends Controller
 
         $transaction->update($validated);
 
-        return response()->json($transaction->refresh());
+        return response()->json($this->payload($transaction->refresh(), new AccountNumbers($this->user($request))));
     }
 
     /**
@@ -208,14 +215,37 @@ class TransactionController extends Controller
 
         $parent = $lines->replace($transaction, $this->splitLines($validated['lines']));
 
-        return response()->json($parent);
+        return response()->json($this->payload($parent, new AccountNumbers($this->user($request))));
     }
 
-    public function destroySplit(Transaction $transaction, SplitTransactionLines $lines): JsonResponse
+    public function destroySplit(Request $request, Transaction $transaction, SplitTransactionLines $lines): JsonResponse
     {
         $this->authorize('update', $transaction);
 
-        return response()->json($lines->clear($transaction));
+        return response()->json($this->payload($lines->clear($transaction), new AccountNumbers($this->user($request))));
+    }
+
+    /**
+     * The stored fields, and account_display_number: the number of the
+     * account the row belongs to, when the bank sync knows it. Split lines
+     * are included when they are loaded.
+     *
+     * @return array<string, mixed>
+     */
+    private function payload(Transaction $transaction, AccountNumbers $numbers): array
+    {
+        $payload = $transaction->attributesToArray();
+        $payload['account_display_number'] = $numbers->forTransaction($transaction);
+
+        if ($transaction->relationLoaded('children')) {
+            $parent = $transaction->withoutRelations();
+
+            $payload['children'] = $transaction->children
+                ->map(fn (Transaction $line): array => $this->payload($line->setRelation('parent', $parent), $numbers))
+                ->all();
+        }
+
+        return $payload;
     }
 
     private function ensureSubcategory(?Category $category, ?Subcategory $subcategory): void
