@@ -9,7 +9,7 @@ use App\Models\User;
 
 /**
  * The account numbers the bank sync knows for one user. An account is shown
- * as its name and its number, "Brukskonto SMN · 4202.10.12345", so two
+ * as its name and its number, "Brukskonto SMN · 1234.56.78901", so two
  * accounts with similar names can be told apart. An account that is only
  * entered by hand has no number here.
  */
