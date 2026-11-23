@@ -40,9 +40,17 @@ Bare rader banken har bokført, blir transaksjoner. Det banken har reservert, la
 
 Transaksjoner som en tidligere versjon importerte mens de var reservert (`booking_status` er `pending`), slettes ikke automatisk. Synken rører dem ikke, og de telles ikke i matbudsjettet. Når banken bokfører raden, kommer den inn som en ny transaksjon ved siden av den gamle. De gamle radene finnes med `GET /api/transactions?booking_status=pending` og slettes med `DELETE /api/transactions/{id}`.
 
+### Kontonavn og kontonummer
+
+Betalingsmåten er navnet på kontoen. To kontoer het begge «Brukskonto». Nå heter de `Brukskonto Hegra`, som føres for hånd, og `Brukskonto SMN`, som synkes fra SpareBank 1. Bare `Brukskonto` er ikke lenger en gyldig betalingsmåte, og API-et svarer 422 på den. I en ledger-CSV leses `Brukskonto` som `Brukskonto Hegra`.
+
+Kontonummeret kommer fra banksynken og står ved siden av navnet der det er kjent, for eksempel «Brukskonto SMN · 1234.56.78901»: i transaksjonslisten, i innboksen, i valgene for betalingsmåte, under Innstillinger → Bank og i kontolisten. En bankrad har nummeret til kontoen den ble hentet fra, og en delingslinje har nummeret til bankraden sin. En rad som er ført for hånd, får nummeret til den synkede kontoen som er koblet til betalingsmåten under Innstillinger → Bank. Er flere synkede kontoer koblet til samme betalingsmåte, står slike rader uten nummer. En konto i kontolisten får nummer når navnet er likt en betalingsmåte som en synket konto er koblet til. Kontoer som bare føres for hånd, har ikke nummer.
+
 ## API
 
 Innstillinger → **Agent**: opprett en personlig tilgangsnøkkel (standardnavn «Personlig regnskapsfører»). Nøkkelen vises bare én gang. Bruk den som `Authorization: Bearer …` mot `/api` (for eksempel `GET /api/me`). Ikke commit nøkkelen.
+
+Transaksjoner (`/api/transactions`, også delingslinjene under `children`) og kontoer (`/api/accounts`) har feltet `account_display_number` i tillegg til de lagrede feltene. Det er kontonummeret slik det vises, eller `null` når nummeret ikke er kjent.
 
 `GET /api/sparebank1` viser tilkoblingsstatus og kontoer. `POST /api/sparebank1/sync` henter transaksjoner. Svaret teller `imported`, `updated` og `skipped` for bokførte rader, og `pending` er antall reserverte rader i øyeblikksbildet etter synken. `PATCH /api/sparebank1/accounts/{id}` skrur synk av eller på og setter betalingsmåte.
 
