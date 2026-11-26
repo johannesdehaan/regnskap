@@ -24,18 +24,9 @@ Bank-CSV uten `kategori` blir ukategorisert. En ledger-CSV med `dato,belop,kateg
 2. Gå til [cloud.laravel.com](https://cloud.laravel.com), opprett en app og koble GitHub-repoet.
 3. Legg til **Serverless Postgres**. Cloud setter `DB_*` selv — du trenger ikke lime inn passord i `.env.example`.
 4. Slå på **hibernation** (scale to zero) på appen og databasen, så du ikke betaler når den sover.
-5. Slå på **Scheduler** på app-klyngen i miljøet. Da kjører Cloud `php artisan schedule:run` hvert minutt. Uten den kjøres ingen av de planlagte oppgavene.
-6. Deploy. Første gang: åpne appen, registrer deg som første bruker, og importer CSV fra Innboks → Import.
+5. Deploy. Første gang: åpne appen, registrer deg som første bruker, og importer CSV fra Innboks → Import.
 
 Migrasjonene er portable (ingen SQLite-spesifikke kolonner), så samme skjema kjører mot MySQL eller Postgres.
-
-### Planlagte oppgaver
-
-`php artisan schedule:list` viser dem: SpareBank 1-synken hver sjette time, og en sjekk hvert minutt som starter kursoppdateringen når et tidspunkt i [kursplanen](#kursplanen) er passert. De kjører bare når Scheduler er slått på i Laravel Cloud.
-
-Scheduleren går bare mens appen er våken. Sover appen fordi hibernation er på, faller SpareBank 1-synken bort, og den tas ikke igjen senere. Kursoppdateringen tas igjen: den starter ved første sjekk etter at appen har våknet. Skal oppgavene gå på tidspunktet uansett, må hibernation være av på appen. Kursene kan også hentes når som helst med `POST /api/holdings/update-prices`, som vekker appen.
-
-Sjekken spør databasen hvert minutt så lenge appen er våken, så databasen sover ikke mens appen er våken.
 
 ## SpareBank 1
 
@@ -57,26 +48,19 @@ Kontonummeret kommer fra banksynken og står ved siden av navnet der det er kjen
 
 ## Kurser på investeringer
 
-En beholdning under **Investeringer** kan ha en ticker i Yahoo Finance-format, for eksempel `EQNR.OL`. Aksjer på Oslo Børs har endelsen `.OL`. `php artisan holdings:update-prices` henter siste kurs nå for alle beholdninger med ticker. Av seg selv hentes kursene på tidspunktene i kursplanen.
+En beholdning under **Investeringer** kan ha en ticker i Yahoo Finance-format, for eksempel `EQNR.OL`. Aksjer på Oslo Børs har endelsen `.OL`.
 
-For hver beholdning setter kommandoen `price` til kursen, `value` til kurs ganger antall, avrundet til to desimaler, og `price_updated_at` til tidspunktet. Beholdninger uten ticker, for eksempel kontanter, røres ikke. En beholdning med ticker, men uten antall, får ny kurs og beholder verdien.
+Appen henter ikke kursene av seg selv. Ingen planlagt oppgave, kø eller bakgrunnsjobb gjør det, så kursene krever ikke Scheduler i Laravel Cloud, og appen kan sove. Kursene hentes når noen ber om det:
 
-Kursen kommer fra chart-API-et til Yahoo Finance, som ikke krever nøkkel. Svarer ikke Yahoo, eller kjenner ikke Yahoo tickeren, hoppes beholdningen over. Det logges, og kommandoen avslutter med feilkode. Verdiene føres i kroner, så en kurs i en annen valuta enn NOK lagres ikke. Beholdningen hoppes over på samme måte.
+- `POST /api/holdings/update-prices` henter kurs for beholdningene dine som har ticker. En agent kan kalle den på det tidspunktet du vil ha, for eksempel etter at Oslo Børs har stengt. Sover appen, vekker kallet den.
+- **Oppdater kurser** på Investeringer gjør det samme. Knappen vises når minst én beholdning har ticker.
+- `php artisan holdings:update-prices` henter kurs for alle beholdninger med ticker, for alle brukere.
+
+En beholdning som får ny kurs, får `price` satt til kursen, `value` til kurs ganger antall, avrundet til to desimaler, og `price_updated_at` til tidspunktet. Beholdninger uten ticker, for eksempel kontanter, røres ikke. En beholdning med ticker, men uten antall, får ny kurs og beholder verdien.
+
+Kursen kommer fra chart-API-et til Yahoo Finance, som ikke krever nøkkel. Svarer ikke Yahoo, eller kjenner ikke Yahoo tickeren, hoppes beholdningen over, og det logges. Verdiene føres i kroner, så en kurs i en annen valuta enn NOK lagres ikke. Beholdningen hoppes over på samme måte. API-et melder de som ble hoppet over i `skipped`, siden lister dem under knappen, og kommandoen avslutter med feilkode.
 
 `price_updated_at` settes av kursoppdateringen, eller når feltet sendes inn via API-et. Det endres ikke når kursen rettes for hånd. ISIN kan lagres ved siden av tickeren. Det brukes ikke til å hente kurs.
-
-### Kursplanen
-
-Hver bruker har en kursplan: en liste med klokkeslett og en liste med ukedager. Kursene hentes på hvert klokkeslett, på hver av ukedagene. Klokkeslettene er norsk tid (Europe/Oslo), sommer som vinter. En ny plan er mandag til fredag kl. 16:45, etter at Oslo Børs har stengt.
-
-Planen ligger i databasen, i tabellen `holding_price_schedules`, og endres uten ny deploy: nederst på **Investeringer**, eller med `PATCH /api/holdings/price-schedule`.
-
-Scheduleren kjører `php artisan holdings:update-prices --due` hvert minutt. Sjekken finner det siste tidspunktet i planen som er passert. Er ikke oppdateringen startet for det tidspunktet, starter den nå, for den brukerens beholdninger. Uten `--due` henter kommandoen kursene for alle med en gang, og den rører ikke planene.
-
-- Hvert tidspunkt gir én oppdatering. Før kursene hentes, lagres tidspunktet i `handled_until`, og av to sjekker som går samtidig, får bare den ene lagret det.
-- Sov appen på tidspunktet, starter oppdateringen ved første sjekk etter at appen våknet, også om det er en annen dag. Er flere tidspunkter passert i mellomtiden, kjøres den én gang.
-- En endring i planen gjelder fra den lagres. Et klokkeslett som alt er passert den dagen, kjøres første gang neste dag i planen.
-- Tidspunktet regnes som kjørt selv om Yahoo ikke svarte. Kursene hentes da ikke på nytt før neste tidspunkt i planen, eller når du ber om det med `POST /api/holdings/update-prices`.
 
 ## API
 
@@ -104,30 +88,8 @@ Beholdninger (`/api/holdings`) har feltene `ticker`, `isin` og `price_updated_at
 | --- | --- | --- |
 | `POST` | `/api/holdings/update-prices` | Henter kurs nå for alle beholdningene dine som har ticker. |
 | `POST` | `/api/holdings/{id}/update-price` | Henter kurs nå for én beholdning, og svarer med beholdningen. |
-| `GET` | `/api/holdings/price-schedule` | Viser kursplanen din. |
-| `PATCH` | `/api/holdings/price-schedule` | Endrer `times`, `weekdays` eller begge i kursplanen din. |
 
 Svaret fra `update-prices` har to lister. `updated` er beholdningene som fikk ny kurs. `skipped` er de som ble hoppet over, med `id`, `name`, `ticker` og `message`. `update-price` svarer 422 med `message` når beholdningen mangler ticker, eller når det ikke kom noen kurs i kroner.
-
-Begge rutene for [kursplanen](#kursplanen) svarer med planen:
-
-```json
-{
-    "times": ["09:30", "16:45"],
-    "weekdays": [1, 2, 3, 4, 5],
-    "timezone": "Europe/Oslo",
-    "next_run_at": "2026-11-27T08:30:00.000000Z",
-    "last_run_at": "2026-11-26T15:45:02.000000Z"
-}
-```
-
-- `times` er klokkeslett som `TT:MM` i norsk tid, med to sifre i timen: `09:30`, ikke `9:30`. Minst ett og høyst 24.
-- `weekdays` er hele tall fra 1 for mandag til 7 for søndag. Minst én.
-- `timezone` er alltid `Europe/Oslo`, og kan ikke endres.
-- `next_run_at` er neste tidspunkt i planen.
-- `last_run_at` er når planen sist startet en oppdatering, eller `null` når den aldri har gjort det. Oppdateringer du starter selv, teller ikke.
-
-`PATCH` tar `times`, `weekdays` eller begge. Et felt som ikke sendes, blir stående. Planen lagres sortert og uten duplikater. En ugyldig verdi gir 422, og da endres ingenting.
 
 ### Matbudsjett og tillegg
 
