@@ -13,9 +13,7 @@ Schedule::command('sparebank1:sync')
     ->withoutOverlapping()
     ->onOneServer();
 
-// Oslo Børs has closed for the day by 16:45.
-Schedule::command('holdings:update-prices')
-    ->weekdays()
-    ->at('16:45')
-    ->timezone('Europe/Oslo')
-    ->onOneServer();
+// The times are in each user's price schedule in the database. This check
+// starts the update when one of them has passed, and marks the time as handled
+// there, so it needs no lock here to run once.
+Schedule::command('holdings:update-prices --due')->everyMinute();

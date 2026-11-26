@@ -3,7 +3,6 @@
 use App\Models\Holding;
 use App\Models\User;
 use App\Services\StockPriceService;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -11,7 +10,7 @@ use Illuminate\Support\Facades\Log;
 use Livewire\Livewire;
 
 beforeEach(function () {
-    // A Wednesday, at the time the scheduled update runs.
+    // A Wednesday.
     Carbon::setTestNow(Carbon::parse('2026-11-25 16:45:00', 'Europe/Oslo'));
 
     Http::preventStrayRequests();
@@ -220,25 +219,6 @@ test('the command does nothing when no holding has a ticker', function () {
         ->assertSuccessful();
 
     Http::assertNothingSent();
-});
-
-test('the price update is scheduled on weekdays at 16:45 in oslo', function () {
-    $this->artisan('schedule:list')->assertSuccessful();
-
-    $event = collect(app(Schedule::class)->events())
-        ->first(fn ($event): bool => str_contains((string) $event->command, 'holdings:update-prices'));
-
-    expect($event)->not->toBeNull()
-        ->and($event->expression)->toBe('45 16 * * 1-5')
-        ->and($event->timezone)->toBe('Europe/Oslo')
-        ->and($event->onOneServer)->toBeTrue()
-        ->and($event->isDue(app()))->toBeTrue();
-
-    Carbon::setTestNow(Carbon::parse('2026-11-28 16:45:00', 'Europe/Oslo'));
-    expect($event->isDue(app()))->toBeFalse();
-
-    Carbon::setTestNow(Carbon::parse('2026-11-25 16:45:00', 'UTC'));
-    expect($event->isDue(app()))->toBeFalse();
 });
 
 test('the holdings api requires a token for the price updates', function () {
