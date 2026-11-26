@@ -68,7 +68,6 @@ class StockPriceService
         $currency = $meta['currency'] ?? null;
 
         return new StockQuote(
-            $ticker,
             (float) $price,
             is_string($currency) && $currency !== '' ? $currency : null,
         );

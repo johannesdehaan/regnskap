@@ -27,7 +27,6 @@ test('the price service reads the latest price and the currency from the chart a
     $quote = app(StockPriceService::class)->quote('EKSEMPEL.OL');
 
     expect($quote)->not->toBeNull()
-        ->and($quote->ticker)->toBe('EKSEMPEL.OL')
         ->and($quote->price)->toBe(12.34)
         ->and($quote->currency)->toBe('NOK');
 

@@ -9,7 +9,6 @@ final readonly class StockQuote
      * meaning: GBp is pence and GBP is pounds.
      */
     public function __construct(
-        public string $ticker,
         public float $price,
         public ?string $currency,
     ) {}
