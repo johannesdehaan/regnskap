@@ -112,14 +112,6 @@ class User extends Authenticatable implements PasskeyUser
     }
 
     /**
-     * @return HasOne<HoldingPriceSchedule, $this>
-     */
-    public function holdingPriceSchedule(): HasOne
-    {
-        return $this->hasOne(HoldingPriceSchedule::class);
-    }
-
-    /**
      * @return HasMany<HousingPlan, $this>
      */
     public function housingPlans(): HasMany

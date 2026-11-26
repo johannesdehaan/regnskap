@@ -6,8 +6,6 @@ use App\Models\BankConnection;
 use App\Models\PendingBankTransaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
-use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 /*
@@ -82,66 +80,4 @@ function reservedBankRow(User $user, array $attributes = []): PendingBankTransac
         'counts_as_food' => true,
         'last_seen_at' => now(),
     ], $attributes));
-}
-
-/**
- * Answer the chart API with made-up prices. A ticker that is not listed gets
- * the answer Yahoo gives for a symbol it does not know.
- *
- * @param  array<string, float|int>  $prices
- */
-function fakeYahooPrices(array $prices, ?string $currency = 'NOK'): void
-{
-    Http::fake(function (Request $request) use ($prices, $currency) {
-        $path = (string) parse_url($request->url(), PHP_URL_PATH);
-        $ticker = rawurldecode(basename($path));
-
-        if (! str_starts_with($path, '/v8/finance/chart/') || ! array_key_exists($ticker, $prices)) {
-            return Http::response(yahooNotFound(), 404);
-        }
-
-        return Http::response(yahooChart($ticker, $prices[$ticker], $currency));
-    });
-}
-
-/**
- * @return array<string, mixed>
- */
-function yahooChart(string $ticker, float|int $price, ?string $currency = 'NOK'): array
-{
-    $meta = [
-        'symbol' => $ticker,
-        'exchangeName' => 'OSL',
-        'instrumentType' => 'EQUITY',
-        'regularMarketPrice' => $price,
-        'dataGranularity' => '1d',
-        'range' => '1d',
-    ];
-
-    if ($currency !== null) {
-        $meta['currency'] = $currency;
-    }
-
-    return [
-        'chart' => [
-            'result' => [['meta' => $meta]],
-            'error' => null,
-        ],
-    ];
-}
-
-/**
- * @return array<string, mixed>
- */
-function yahooNotFound(): array
-{
-    return [
-        'chart' => [
-            'result' => null,
-            'error' => [
-                'code' => 'Not Found',
-                'description' => 'No data found, symbol may be delisted',
-            ],
-        ],
-    ];
 }

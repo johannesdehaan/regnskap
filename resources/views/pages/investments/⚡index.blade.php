@@ -2,7 +2,6 @@
 
 use App\Enums\HoldingType;
 use App\Models\Holding;
-use App\Models\HoldingPriceSchedule;
 use Flux\Flux;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -29,30 +28,9 @@ new #[Title('Investeringer')] class extends Component
 
     public string $type = 'portefolje';
 
-    /**
-     * The times in the price schedule, as HH:MM.
-     *
-     * @var list<string>
-     */
-    public array $times = [];
-
-    /**
-     * The weekdays in the price schedule, as the strings the checkboxes hold.
-     *
-     * @var list<string>
-     */
-    public array $weekdays = [];
-
     public function mount(): void
     {
         $this->authorize('viewAny', Holding::class);
-        $this->fillSchedule();
-    }
-
-    #[Computed]
-    public function schedule(): HoldingPriceSchedule
-    {
-        return HoldingPriceSchedule::for(Auth::user());
     }
 
     /**
@@ -145,40 +123,6 @@ new #[Title('Investeringer')] class extends Component
         Flux::toast(variant: 'success', text: __('Slettet.'));
         unset($this->holdings, $this->totalValue);
     }
-
-    public function addTime(): void
-    {
-        if (count($this->times) < HoldingPriceSchedule::MAX_TIMES) {
-            $this->times[] = '';
-        }
-    }
-
-    public function removeTime(int $index): void
-    {
-        unset($this->times[$index]);
-        $this->times = array_values($this->times);
-    }
-
-    public function saveSchedule(): void
-    {
-        $this->authorize('viewAny', Holding::class);
-
-        // A row that was added and left empty is not a time.
-        $this->times = array_values(array_filter($this->times, fn (mixed $time): bool => $time !== '' && $time !== null));
-
-        $validated = $this->validate(HoldingPriceSchedule::rules(), HoldingPriceSchedule::messages());
-
-        $this->schedule->reschedule($validated['times'], $validated['weekdays']);
-        $this->fillSchedule();
-
-        Flux::toast(variant: 'success', text: __('Lagret.'));
-    }
-
-    private function fillSchedule(): void
-    {
-        $this->times = $this->schedule->times;
-        $this->weekdays = array_map(strval(...), $this->schedule->weekdays);
-    }
 }; ?>
 
 <div class="mx-auto flex w-full max-w-lg flex-col gap-6 py-4">
@@ -203,7 +147,7 @@ new #[Title('Investeringer')] class extends Component
         <flux:input
             wire:model="ticker"
             :label="__('Ticker')"
-            :description="__('Yahoo-format, for eksempel EQNR.OL. Med ticker hentes kursen automatisk på tidspunktene nederst på siden, og verdien blir kurs ganger antall.')"
+            :description="__('Yahoo-format, for eksempel EQNR.OL. Med ticker kan kursen hentes, og verdien blir da kurs ganger antall.')"
             :maxlength="\App\Models\Holding::TICKER_MAX_LENGTH"
             autocapitalize="characters"
             autocomplete="off"
@@ -251,58 +195,4 @@ new #[Title('Investeringer')] class extends Component
             <flux:text>{{ __('Ingen beholdninger ennå.') }}</flux:text>
         @endforelse
     </div>
-
-    <form wire:submit="saveSchedule" class="space-y-4 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700" data-test="price-schedule">
-        <div class="space-y-1">
-            <flux:heading size="sm">{{ __('Automatisk kursoppdatering') }}</flux:heading>
-            <flux:text class="text-sm">
-                {{ __('Kursene hentes på disse tidspunktene, norsk tid, for beholdninger med ticker. Sover appen da, hentes de når den våkner.') }}
-            </flux:text>
-        </div>
-
-        <flux:checkbox.group wire:model="weekdays" :label="__('Ukedager')" class="flex flex-wrap gap-x-5">
-            @foreach ([1 => 'Man', 2 => 'Tir', 3 => 'Ons', 4 => 'Tor', 5 => 'Fre', 6 => 'Lør', 7 => 'Søn'] as $number => $label)
-                <flux:checkbox value="{{ $number }}" :label="__($label)" />
-            @endforeach
-        </flux:checkbox.group>
-
-        <div class="space-y-3">
-            <flux:label>{{ __('Klokkeslett') }}</flux:label>
-            @foreach ($times as $index => $time)
-                <div wire:key="price-schedule-time-{{ $index }}">
-                    <div class="flex items-center gap-3">
-                        <flux:input
-                            wire:model="times.{{ $index }}"
-                            type="time"
-                            class="max-w-36"
-                            :aria-label="__('Klokkeslett').' '.($index + 1)"
-                        />
-                        <flux:button type="button" size="sm" variant="subtle" wire:click="removeTime({{ $index }})">{{ __('Fjern') }}</flux:button>
-                    </div>
-                    <flux:error name="times.{{ $index }}" />
-                </div>
-            @endforeach
-            <flux:error name="times" :deep="false" />
-            @if (count($times) < \App\Models\HoldingPriceSchedule::MAX_TIMES)
-                <flux:button type="button" size="sm" variant="subtle" wire:click="addTime">{{ __('Legg til klokkeslett') }}</flux:button>
-            @endif
-        </div>
-
-        <flux:button type="submit" variant="primary">{{ __('Lagre tidspunkter') }}</flux:button>
-
-        @php
-            $nextRun = $this->schedule->nextTime(now());
-            $lastRun = $this->schedule->last_run_at;
-        @endphp
-        <flux:text class="text-sm" data-test="price-schedule-status">
-            @if ($nextRun)
-                {{ __('Neste') }}: {{ $nextRun->locale('nb')->isoFormat('dddd DD.MM.YYYY [kl.] HH:mm') }}.
-            @endif
-            @if ($lastRun)
-                {{ __('Forrige') }}: {{ $lastRun->timezone('Europe/Oslo')->locale('nb')->isoFormat('dddd DD.MM.YYYY [kl.] HH:mm') }}.
-            @else
-                {{ __('Planen har ikke kjørt ennå.') }}
-            @endif
-        </flux:text>
-    </form>
 </div>

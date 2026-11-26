@@ -3,6 +3,7 @@
 use App\Models\Holding;
 use App\Models\User;
 use App\Services\StockPriceService;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -219,6 +220,17 @@ test('the command does nothing when no holding has a ticker', function () {
         ->assertSuccessful();
 
     Http::assertNothingSent();
+});
+
+// The app sleeps when nobody uses it, so the prices are asked for from outside.
+test('the scheduler does not fetch prices', function () {
+    $this->artisan('schedule:list')->assertSuccessful();
+
+    $commands = collect(app(Schedule::class)->events())
+        ->map(fn ($event): string => (string) $event->command)
+        ->filter(fn (string $command): bool => str_contains($command, 'holdings:'));
+
+    expect($commands->all())->toBe([]);
 });
 
 test('the holdings api requires a token for the price updates', function () {
@@ -561,3 +573,65 @@ test('the investments page rejects a malformed ticker or isin', function () {
 
     expect($user->holdings()->count())->toBe(0);
 });
+
+/**
+ * Answer the chart API with made-up prices. A ticker that is not listed gets
+ * the answer Yahoo gives for a symbol it does not know.
+ *
+ * @param  array<string, float|int>  $prices
+ */
+function fakeYahooPrices(array $prices, ?string $currency = 'NOK'): void
+{
+    Http::fake(function (Request $request) use ($prices, $currency) {
+        $path = (string) parse_url($request->url(), PHP_URL_PATH);
+        $ticker = rawurldecode(basename($path));
+
+        if (! str_starts_with($path, '/v8/finance/chart/') || ! array_key_exists($ticker, $prices)) {
+            return Http::response(yahooNotFound(), 404);
+        }
+
+        return Http::response(yahooChart($ticker, $prices[$ticker], $currency));
+    });
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function yahooChart(string $ticker, float|int $price, ?string $currency = 'NOK'): array
+{
+    $meta = [
+        'symbol' => $ticker,
+        'exchangeName' => 'OSL',
+        'instrumentType' => 'EQUITY',
+        'regularMarketPrice' => $price,
+        'dataGranularity' => '1d',
+        'range' => '1d',
+    ];
+
+    if ($currency !== null) {
+        $meta['currency'] = $currency;
+    }
+
+    return [
+        'chart' => [
+            'result' => [['meta' => $meta]],
+            'error' => null,
+        ],
+    ];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function yahooNotFound(): array
+{
+    return [
+        'chart' => [
+            'result' => null,
+            'error' => [
+                'code' => 'Not Found',
+                'description' => 'No data found, symbol may be delisted',
+            ],
+        ],
+    ];
+}

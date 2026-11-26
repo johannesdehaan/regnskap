@@ -6,7 +6,6 @@ use App\Http\Controllers\Api\FoodBudgetAdditionController;
 use App\Http\Controllers\Api\FoodBudgetController;
 use App\Http\Controllers\Api\FoodRuleController;
 use App\Http\Controllers\Api\HoldingController;
-use App\Http\Controllers\Api\HoldingPriceScheduleController;
 use App\Http\Controllers\Api\HousingPlanController;
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\MonthlyFigureController;
@@ -49,8 +48,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/holdings', [HoldingController::class, 'index']);
     Route::post('/holdings', [HoldingController::class, 'store']);
     Route::post('/holdings/update-prices', [HoldingController::class, 'updatePrices']);
-    Route::get('/holdings/price-schedule', [HoldingPriceScheduleController::class, 'show']);
-    Route::patch('/holdings/price-schedule', [HoldingPriceScheduleController::class, 'update']);
     Route::post('/holdings/{holding}/update-price', [HoldingController::class, 'updatePrice']);
     Route::patch('/holdings/{holding}', [HoldingController::class, 'update']);
     Route::delete('/holdings/{holding}', [HoldingController::class, 'destroy']);
