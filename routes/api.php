@@ -47,6 +47,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/holdings', [HoldingController::class, 'index']);
     Route::post('/holdings', [HoldingController::class, 'store']);
+    Route::post('/holdings/update-prices', [HoldingController::class, 'updatePrices']);
+    Route::post('/holdings/{holding}/update-price', [HoldingController::class, 'updatePrice']);
     Route::patch('/holdings/{holding}', [HoldingController::class, 'update']);
     Route::delete('/holdings/{holding}', [HoldingController::class, 'destroy']);
 
