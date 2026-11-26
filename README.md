@@ -24,9 +24,16 @@ Bank-CSV uten `kategori` blir ukategorisert. En ledger-CSV med `dato,belop,kateg
 2. Gå til [cloud.laravel.com](https://cloud.laravel.com), opprett en app og koble GitHub-repoet.
 3. Legg til **Serverless Postgres**. Cloud setter `DB_*` selv — du trenger ikke lime inn passord i `.env.example`.
 4. Slå på **hibernation** (scale to zero) på appen og databasen, så du ikke betaler når den sover.
-5. Deploy. Første gang: åpne appen, registrer deg som første bruker, og importer CSV fra Innboks → Import.
+5. Slå på **Scheduler** på app-klyngen i miljøet. Da kjører Cloud `php artisan schedule:run` hvert minutt. Uten den kjøres ingen av de planlagte oppgavene.
+6. Deploy. Første gang: åpne appen, registrer deg som første bruker, og importer CSV fra Innboks → Import.
 
 Migrasjonene er portable (ingen SQLite-spesifikke kolonner), så samme skjema kjører mot MySQL eller Postgres.
+
+### Planlagte oppgaver
+
+`php artisan schedule:list` viser dem: SpareBank 1-synken hver sjette time, og kursoppdateringen på hverdager kl. 16:45 norsk tid. De kjører bare når Scheduler er slått på i Laravel Cloud.
+
+Scheduleren går bare mens appen er våken. Sover appen på tidspunktet fordi hibernation er på, faller kjøringen bort, og den tas ikke igjen senere. Skal oppgavene gå uansett, må hibernation være av på appen. Kursene kan også hentes når som helst med `POST /api/holdings/update-prices`, som vekker appen.
 
 ## SpareBank 1
 
@@ -46,6 +53,16 @@ Betalingsmåten er navnet på kontoen. To kontoer het begge «Brukskonto». Nå 
 
 Kontonummeret kommer fra banksynken og står ved siden av navnet der det er kjent, for eksempel «Brukskonto SMN · 1234.56.78901»: i transaksjonslisten, i innboksen, i valgene for betalingsmåte, under Innstillinger → Bank og i kontolisten. En bankrad har nummeret til kontoen den ble hentet fra, og en delingslinje har nummeret til bankraden sin. En rad som er ført for hånd, får nummeret til den synkede kontoen som er koblet til betalingsmåten under Innstillinger → Bank. Er flere synkede kontoer koblet til samme betalingsmåte, står slike rader uten nummer. En konto i kontolisten får nummer når navnet er likt en betalingsmåte som en synket konto er koblet til. Kontoer som bare føres for hånd, har ikke nummer.
 
+## Kurser på investeringer
+
+En beholdning under **Investeringer** kan ha en ticker i Yahoo Finance-format, for eksempel `EQNR.OL`. Aksjer på Oslo Børs har endelsen `.OL`. `php artisan holdings:update-prices` henter siste kurs for alle beholdninger med ticker, og den kjører av seg selv på hverdager kl. 16:45 norsk tid, etter at Oslo Børs har stengt.
+
+For hver beholdning setter kommandoen `price` til kursen, `value` til kurs ganger antall, avrundet til to desimaler, og `price_updated_at` til tidspunktet. Beholdninger uten ticker, for eksempel kontanter, røres ikke. En beholdning med ticker, men uten antall, får ny kurs og beholder verdien.
+
+Kursen kommer fra chart-API-et til Yahoo Finance, som ikke krever nøkkel. Svarer ikke Yahoo, eller kjenner ikke Yahoo tickeren, hoppes beholdningen over. Det logges, og kommandoen avslutter med feilkode. Verdiene føres i kroner, så en kurs i en annen valuta enn NOK lagres ikke. Beholdningen hoppes over på samme måte.
+
+`price_updated_at` settes av kursoppdateringen, eller når feltet sendes inn via API-et. Det endres ikke når kursen rettes for hånd. ISIN kan lagres ved siden av tickeren. Det brukes ikke til å hente kurs.
+
 ## API
 
 Innstillinger → **Agent**: opprett en personlig tilgangsnøkkel (standardnavn «Personlig regnskapsfører»). Nøkkelen vises bare én gang. Bruk den som `Authorization: Bearer …` mot `/api` (for eksempel `GET /api/me`). Ikke commit nøkkelen.
@@ -57,6 +74,23 @@ Transaksjoner (`/api/transactions`, også delingslinjene under `children`) og ko
 `GET /api/pending-transactions` lister øyeblikksbildet av reserverte rader, nyeste dato først. `amount` har fortegn, og negativt er penger ut. `suggested_category` er forslaget fra matreglene. `counts_as_food` er sann når raden er et kjøp som ville telt i matbudsjettet slik den står nå. `last_seen_at` er tidspunktet for synken som hentet raden.
 
 `DELETE /api/transactions/{id}` sletter en transaksjon. Er den delt, slettes delingslinjene også. En delingslinje kan ikke slettes alene (422). En bokført bankrad som slettes, importeres på nytt hvis banken fortsatt melder den innenfor synkevinduet. `GET /api/transactions?booking_status=pending` lister bankrader med den statusen, også de som er delt.
+
+### Beholdninger og kurser
+
+Beholdninger (`/api/holdings`) har feltene `ticker`, `isin` og `price_updated_at` i `GET`, og de kan settes i `POST` og `PATCH`. Alle tre kan være `null`.
+
+- `ticker` er symbolet hos Yahoo Finance. Det er høyst 32 tegn, og kan ha bokstaver, tall og tegnene `.`, `-`, `^`, `=` og `&`.
+- `isin` er tolv tegn: to bokstaver, ni bokstaver eller tall, og ett tall.
+- `price_updated_at` er et tidspunkt, for eksempel `2026-11-24T16:45:00+01:00`. Uten tidssone leses det som norsk tid.
+
+`ticker` og `isin` lagres med store bokstaver.
+
+| Metode | Sti | Gjør |
+| --- | --- | --- |
+| `POST` | `/api/holdings/update-prices` | Henter kurs nå for alle beholdningene dine som har ticker. |
+| `POST` | `/api/holdings/{id}/update-price` | Henter kurs nå for én beholdning, og svarer med beholdningen. |
+
+Svaret fra `update-prices` har to lister. `updated` er beholdningene som fikk ny kurs. `skipped` er de som ble hoppet over, med `id`, `name`, `ticker` og `message`. `update-price` svarer 422 med `message` når beholdningen mangler ticker, eller når det ikke kom noen kurs i kroner.
 
 ### Matbudsjett og tillegg
 
