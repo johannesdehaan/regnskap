@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\RefreshHoldingPrices;
 use App\Enums\HoldingType;
 use App\Models\Holding;
 use Flux\Flux;
@@ -22,7 +23,18 @@ new #[Title('Investeringer')] class extends Component
 
     public string $quantity = '';
 
+    public string $ticker = '';
+
+    public string $isin = '';
+
     public string $type = 'portefolje';
+
+    /**
+     * Why the last price update left a holding without a new price, by the id of the holding.
+     *
+     * @var array<int, string>
+     */
+    public array $priceErrors = [];
 
     public function mount(): void
     {
@@ -54,6 +66,8 @@ new #[Title('Investeringer')] class extends Component
         $this->value = (string) $holding->value;
         $this->price = $holding->price !== null ? (string) $holding->price : '';
         $this->quantity = $holding->quantity !== null ? (string) $holding->quantity : '';
+        $this->ticker = $holding->ticker ?? '';
+        $this->isin = $holding->isin ?? '';
         $this->type = $holding->type->value;
     }
 
@@ -61,7 +75,7 @@ new #[Title('Investeringer')] class extends Component
     {
         $this->editingId = null;
         $this->type = HoldingType::Portefolje->value;
-        $this->reset('name', 'value', 'price', 'quantity');
+        $this->reset('name', 'value', 'price', 'quantity', 'ticker', 'isin');
     }
 
     public function save(): void
@@ -71,6 +85,8 @@ new #[Title('Investeringer')] class extends Component
             'value' => ['required', 'numeric', 'min:0'],
             'price' => ['nullable', 'numeric', 'min:0'],
             'quantity' => ['nullable', 'numeric', 'min:0'],
+            'ticker' => ['nullable', 'string', 'max:'.Holding::TICKER_MAX_LENGTH, 'regex:'.Holding::TICKER_PATTERN],
+            'isin' => ['nullable', 'string', 'regex:'.Holding::ISIN_PATTERN],
             'type' => ['required', Rule::enum(HoldingType::class)],
         ]);
 
@@ -83,6 +99,8 @@ new #[Title('Investeringer')] class extends Component
             'quantity' => $validated['quantity'] === null || $validated['quantity'] === ''
                 ? null
                 : number_format((float) $validated['quantity'], 6, '.', ''),
+            'ticker' => Holding::code($validated['ticker']),
+            'isin' => Holding::code($validated['isin']),
             'type' => HoldingType::from($validated['type']),
         ];
 
@@ -90,6 +108,7 @@ new #[Title('Investeringer')] class extends Component
             $holding = Holding::query()->findOrFail($this->editingId);
             $this->authorize('update', $holding);
             $holding->update($payload);
+            unset($this->priceErrors[$holding->id]);
         } else {
             $this->authorize('create', Holding::class);
             Auth::user()->holdings()->create($payload);
@@ -111,7 +130,36 @@ new #[Title('Investeringer')] class extends Component
         }
 
         Flux::toast(variant: 'success', text: __('Slettet.'));
+        unset($this->priceErrors[$id]);
         unset($this->holdings, $this->totalValue);
+    }
+
+    public function updatePrices(RefreshHoldingPrices $refresh): void
+    {
+        $this->authorize('viewAny', Holding::class);
+
+        $result = $refresh(Auth::user()->holdings()->whereNotNull('ticker')->orderBy('name')->get());
+
+        $this->priceErrors = [];
+
+        foreach ($result['skipped'] as $row) {
+            $this->priceErrors[$row['holding']->id] = $row['holding']->name.': '.$row['message'];
+        }
+
+        foreach ($result['updated'] as $holding) {
+            // The form still has the old price of the holding being edited, and saving would put it back.
+            if ($holding->id === $this->editingId) {
+                $this->price = (string) $holding->price;
+                $this->value = (string) $holding->value;
+            }
+        }
+
+        unset($this->holdings, $this->totalValue);
+
+        Flux::toast(
+            variant: $result['skipped'] === [] ? 'success' : 'warning',
+            text: sprintf('%d oppdatert, %d hoppet over.', count($result['updated']), count($result['skipped'])),
+        );
     }
 }; ?>
 
@@ -134,6 +182,16 @@ new #[Title('Investeringer')] class extends Component
             <flux:input wire:model="price" type="number" step="0.0001" min="0" :label="__('Kurs')" />
             <flux:input wire:model="quantity" type="number" step="0.000001" min="0" :label="__('Antall')" />
         </div>
+        <flux:input
+            wire:model="ticker"
+            :label="__('Ticker')"
+            :description="__('Yahoo-format, for eksempel EQNR.OL. Med ticker kan kursen hentes, og verdien blir da kurs ganger antall.')"
+            :maxlength="\App\Models\Holding::TICKER_MAX_LENGTH"
+            autocapitalize="characters"
+            autocomplete="off"
+            spellcheck="false"
+        />
+        <flux:input wire:model="isin" :label="__('ISIN')" maxlength="12" autocapitalize="characters" autocomplete="off" spellcheck="false" />
         <div class="flex gap-3">
             <flux:button type="submit" variant="primary">{{ __('Lagre') }}</flux:button>
             @if ($editingId)
@@ -142,13 +200,40 @@ new #[Title('Investeringer')] class extends Component
         </div>
     </form>
 
+    @if ($this->holdings->whereNotNull('ticker')->isNotEmpty())
+        <div class="space-y-3">
+            <flux:button type="button" wire:click="updatePrices" data-test="update-prices">{{ __('Oppdater kurser') }}</flux:button>
+            @if ($priceErrors !== [])
+                <div class="space-y-1 rounded-xl border border-red-200 p-4 dark:border-red-900" data-test="price-errors">
+                    @foreach ($priceErrors as $error)
+                        <flux:text>{{ $error }}</flux:text>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endif
+
     <div class="space-y-3">
         @forelse ($this->holdings as $holding)
             <div class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
                 <div class="flex items-baseline justify-between gap-3">
                     <div>
                         <flux:heading size="sm">{{ $holding->name }}</flux:heading>
-                        <flux:text class="text-sm">{{ $holding->type->label() }}</flux:text>
+                        <flux:text class="text-sm">
+                            {{ $holding->type->label() }}
+                            @if ($holding->ticker)
+                                · <span data-test="holding-ticker">{{ $holding->ticker }}</span>
+                            @endif
+                        </flux:text>
+                        @if ($holding->price !== null && $holding->price_updated_at)
+                            <flux:text class="text-sm" data-test="holding-price-updated">
+                                {{-- Two to four decimals: trailing zeros beyond the second are dropped. --}}
+                                {{ __('Kurs') }} {{ preg_replace('/0{1,2}$/', '', number_format((float) $holding->price, 4, ',', ' ')) }} kr
+                                · {{ __('oppdatert') }} {{ $holding->price_updated_at->timezone('Europe/Oslo')->format('d.m.Y H:i') }}
+                            </flux:text>
+                        @elseif ($holding->ticker)
+                            <flux:text class="text-sm" data-test="holding-price-updated">{{ __('Kursen er ikke hentet ennå.') }}</flux:text>
+                        @endif
                     </div>
                     <p class="font-semibold tabular-nums">{{ number_format((float) $holding->value, 0, ',', ' ') }} kr</p>
                 </div>

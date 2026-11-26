@@ -46,6 +46,22 @@ Betalingsmåten er navnet på kontoen. To kontoer het begge «Brukskonto». Nå 
 
 Kontonummeret kommer fra banksynken og står ved siden av navnet der det er kjent, for eksempel «Brukskonto SMN · 1234.56.78901»: i transaksjonslisten, i innboksen, i valgene for betalingsmåte, under Innstillinger → Bank og i kontolisten. En bankrad har nummeret til kontoen den ble hentet fra, og en delingslinje har nummeret til bankraden sin. En rad som er ført for hånd, får nummeret til den synkede kontoen som er koblet til betalingsmåten under Innstillinger → Bank. Er flere synkede kontoer koblet til samme betalingsmåte, står slike rader uten nummer. En konto i kontolisten får nummer når navnet er likt en betalingsmåte som en synket konto er koblet til. Kontoer som bare føres for hånd, har ikke nummer.
 
+## Kurser på investeringer
+
+En beholdning under **Investeringer** kan ha en ticker i Yahoo Finance-format, for eksempel `EQNR.OL`. Aksjer på Oslo Børs har endelsen `.OL`.
+
+Appen henter ikke kursene av seg selv. Ingen planlagt oppgave, kø eller bakgrunnsjobb gjør det, så kursene krever ikke Scheduler i Laravel Cloud, og appen kan sove. Kursene hentes når noen ber om det:
+
+- `POST /api/holdings/update-prices` henter kurs for beholdningene dine som har ticker. En agent kan kalle den på det tidspunktet du vil ha, for eksempel etter at Oslo Børs har stengt. Sover appen, vekker kallet den.
+- **Oppdater kurser** på Investeringer gjør det samme. Knappen vises når minst én beholdning har ticker.
+- `php artisan holdings:update-prices` henter kurs for alle beholdninger med ticker, for alle brukere.
+
+En beholdning som får ny kurs, får `price` satt til kursen, `value` til kurs ganger antall, avrundet til to desimaler, og `price_updated_at` til tidspunktet. Beholdninger uten ticker, for eksempel kontanter, røres ikke. En beholdning med ticker, men uten antall, får ny kurs og beholder verdien.
+
+Kursen kommer fra chart-API-et til Yahoo Finance, som ikke krever nøkkel. Svarer ikke Yahoo, eller kjenner ikke Yahoo tickeren, hoppes beholdningen over, og det logges. Verdiene føres i kroner, så en kurs i en annen valuta enn NOK lagres ikke. Beholdningen hoppes over på samme måte. API-et melder de som ble hoppet over i `skipped`, siden lister dem under knappen, og kommandoen avslutter med feilkode.
+
+`price_updated_at` settes av kursoppdateringen, eller når feltet sendes inn via API-et. Det endres ikke når kursen rettes for hånd. ISIN kan lagres ved siden av tickeren. Det brukes ikke til å hente kurs.
+
 ## API
 
 Innstillinger → **Agent**: opprett en personlig tilgangsnøkkel (standardnavn «Personlig regnskapsfører»). Nøkkelen vises bare én gang. Bruk den som `Authorization: Bearer …` mot `/api` (for eksempel `GET /api/me`). Ikke commit nøkkelen.
@@ -57,6 +73,23 @@ Transaksjoner (`/api/transactions`, også delingslinjene under `children`) og ko
 `GET /api/pending-transactions` lister øyeblikksbildet av reserverte rader, nyeste dato først. `amount` har fortegn, og negativt er penger ut. `suggested_category` er forslaget fra matreglene. `counts_as_food` er sann når raden er et kjøp som ville telt i matbudsjettet slik den står nå. `last_seen_at` er tidspunktet for synken som hentet raden.
 
 `DELETE /api/transactions/{id}` sletter en transaksjon. Er den delt, slettes delingslinjene også. En delingslinje kan ikke slettes alene (422). En bokført bankrad som slettes, importeres på nytt hvis banken fortsatt melder den innenfor synkevinduet. `GET /api/transactions?booking_status=pending` lister bankrader med den statusen, også de som er delt.
+
+### Beholdninger og kurser
+
+Beholdninger (`/api/holdings`) har feltene `ticker`, `isin` og `price_updated_at` i `GET`, og de kan settes i `POST` og `PATCH`. Alle tre kan være `null`.
+
+- `ticker` er symbolet hos Yahoo Finance. Det er høyst 32 tegn, og kan ha bokstaver, tall og tegnene `.`, `-`, `^`, `=` og `&`.
+- `isin` er tolv tegn: to bokstaver, ni bokstaver eller tall, og ett tall.
+- `price_updated_at` er et tidspunkt, for eksempel `2026-11-24T16:45:00+01:00`. Uten tidssone leses det som norsk tid.
+
+`ticker` og `isin` lagres med store bokstaver.
+
+| Metode | Sti | Gjør |
+| --- | --- | --- |
+| `POST` | `/api/holdings/update-prices` | Henter kurs nå for alle beholdningene dine som har ticker. |
+| `POST` | `/api/holdings/{id}/update-price` | Henter kurs nå for én beholdning, og svarer med beholdningen. |
+
+Svaret fra `update-prices` har to lister. `updated` er beholdningene som fikk ny kurs. `skipped` er de som ble hoppet over, med `id`, `name`, `ticker` og `message`. `update-price` svarer 422 med `message` når beholdningen mangler ticker, eller når det ikke kom noen kurs i kroner.
 
 ### Matbudsjett og tillegg
 
