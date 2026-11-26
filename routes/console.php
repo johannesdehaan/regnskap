@@ -12,3 +12,10 @@ Schedule::command('sparebank1:sync')
     ->everySixHours()
     ->withoutOverlapping()
     ->onOneServer();
+
+// Weekdays after Oslo Børs has closed, so the stored price is the day's close.
+Schedule::command('holdings:update-prices')
+    ->weekdays()
+    ->at('16:45')
+    ->timezone('Europe/Oslo')
+    ->onOneServer();
