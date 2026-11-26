@@ -574,6 +574,157 @@ test('the investments page rejects a malformed ticker or isin', function () {
     expect($user->holdings()->count())->toBe(0);
 });
 
+test('the investments page fetches the prices of the users own holdings', function () {
+    fakeYahooPrices(['EKSEMPEL.OL' => 12.34, 'ANNEN.OL' => 99]);
+
+    $user = User::factory()->create();
+    $stock = Holding::factory()->for($user)->create([
+        'name' => 'Eksempel ASA',
+        'ticker' => 'EKSEMPEL.OL',
+        'quantity' => '150.000000',
+        'price' => '10.0000',
+        'value' => '1500.00',
+    ]);
+    $cash = Holding::factory()->for($user)->create(['name' => 'Kontanter', 'ticker' => null, 'value' => '400.00']);
+    $theirs = Holding::factory()->create(['ticker' => 'ANNEN.OL', 'price' => '10.0000', 'value' => '100.00']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->assertSee('1 900 kr')
+        ->call('updatePrices')
+        ->assertDispatched('toast-show', slots: ['text' => '1 oppdatert, 0 hoppet over.'], dataset: ['variant' => 'success'])
+        ->assertSee('Kurs 12,34 kr')
+        ->assertSee('oppdatert 25.11.2026 16:45')
+        ->assertSee('2 251 kr')
+        ->assertSet('priceErrors', []);
+
+    $stock->refresh();
+
+    expect($stock->price)->toBe('12.3400')
+        ->and($stock->value)->toBe('1851.00')
+        ->and($stock->price_updated_at->equalTo(now()))->toBeTrue()
+        ->and($cash->fresh()->value)->toBe('400.00')
+        ->and($theirs->fresh()->price)->toBe('10.0000')
+        ->and($theirs->fresh()->price_updated_at)->toBeNull();
+
+    Http::assertSentCount(1);
+});
+
+test('the investments page lists a holding that got no price until it is saved or deleted', function () {
+    fakeYahooPrices(['EKSEMPEL.OL' => 12.34]);
+
+    $user = User::factory()->create();
+    $known = Holding::factory()->for($user)->create(['name' => 'Eksempel ASA', 'ticker' => 'EKSEMPEL.OL']);
+    $unknown = Holding::factory()->for($user)->create(['name' => 'Ukjent AS', 'ticker' => 'UKJENT.OL', 'price' => '10.0000']);
+    $gone = Holding::factory()->for($user)->create(['name' => 'Borte AS', 'ticker' => 'BORTE.OL']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->call('updatePrices')
+        ->assertDispatched('toast-show', slots: ['text' => '1 oppdatert, 2 hoppet over.'], dataset: ['variant' => 'warning'])
+        ->assertSeeHtmlInOrder([
+            'Borte AS: Fant ingen kurs for BORTE.OL.',
+            'Ukjent AS: Fant ingen kurs for UKJENT.OL.',
+        ])
+        ->call('delete', $gone->id)
+        ->assertDontSee('Fant ingen kurs for BORTE.OL.')
+        ->assertSee('Ukjent AS: Fant ingen kurs for UKJENT.OL.')
+        ->call('edit', $known->id)
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSee('Ukjent AS: Fant ingen kurs for UKJENT.OL.')
+        ->call('edit', $unknown->id)
+        ->set('ticker', 'EKSEMPEL.OL')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSet('priceErrors', [])
+        ->assertDontSeeHtml('data-test="price-errors"');
+});
+
+test('a new price update replaces the list of holdings that got no price', function () {
+    fakeYahooPrices(['EKSEMPEL.OL' => 12.34]);
+
+    $user = User::factory()->create();
+    $holding = Holding::factory()->for($user)->create(['name' => 'Ukjent AS', 'ticker' => 'UKJENT.OL']);
+
+    $page = Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->call('updatePrices')
+        ->assertSee('Ukjent AS: Fant ingen kurs for UKJENT.OL.');
+
+    // The ticker is corrected through the API, not on the page.
+    $holding->update(['ticker' => 'EKSEMPEL.OL']);
+
+    $page->call('updatePrices')
+        ->assertDispatched('toast-show', slots: ['text' => '1 oppdatert, 0 hoppet over.'], dataset: ['variant' => 'success'])
+        ->assertDontSeeHtml('data-test="price-errors"');
+
+    expect($holding->fresh()->price)->toBe('12.3400');
+});
+
+test('a price in another currency than kroner is listed on the investments page', function () {
+    fakeYahooPrices(['EKSEMPEL.ST' => 55], currency: 'SEK');
+
+    $user = User::factory()->create();
+    $holding = Holding::factory()->for($user)->create(['name' => 'Eksempel AB', 'ticker' => 'EKSEMPEL.ST', 'price' => '10.0000']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->call('updatePrices')
+        ->assertSee('Eksempel AB: Kursen for EKSEMPEL.ST er i SEK, ikke NOK.');
+
+    expect($holding->fresh()->price)->toBe('10.0000');
+});
+
+test('the price update fills the new price into the form of the holding being edited', function () {
+    fakeYahooPrices(['EKSEMPEL.OL' => 12.34]);
+
+    $user = User::factory()->create();
+    $holding = Holding::factory()->for($user)->create([
+        'name' => 'Eksempel ASA',
+        'ticker' => 'EKSEMPEL.OL',
+        'quantity' => '150.000000',
+        'price' => '10.0000',
+        'value' => '1500.00',
+    ]);
+    $other = Holding::factory()->for($user)->create(['ticker' => 'EKSEMPEL.OL', 'quantity' => '2.000000']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->call('edit', $holding->id)
+        ->assertSet('price', '10.0000')
+        ->set('name', 'Eksempel ASA B')
+        ->call('updatePrices')
+        ->assertSet('price', '12.3400')
+        ->assertSet('value', '1851.00')
+        ->assertSet('name', 'Eksempel ASA B')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $holding->refresh();
+
+    expect($holding->name)->toBe('Eksempel ASA B')
+        ->and($holding->price)->toBe('12.3400')
+        ->and($holding->value)->toBe('1851.00')
+        ->and($other->fresh()->value)->toBe('24.68');
+});
+
+test('the investments page offers the price update only when a holding has a ticker', function () {
+    $user = User::factory()->create();
+    $holding = Holding::factory()->for($user)->create(['ticker' => null]);
+    Holding::factory()->create(['ticker' => 'ANNEN.OL']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->assertDontSee('Oppdater kurser');
+
+    $holding->update(['ticker' => 'EKSEMPEL.OL']);
+
+    Livewire::actingAs($user)
+        ->test('pages::investments.index')
+        ->assertSee('Oppdater kurser');
+});
+
 /**
  * Answer the chart API with made-up prices. A ticker that is not listed gets
  * the answer Yahoo gives for a symbol it does not know.

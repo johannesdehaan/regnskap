@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\RefreshHoldingPrices;
 use App\Enums\HoldingType;
 use App\Models\Holding;
 use Flux\Flux;
@@ -27,6 +28,13 @@ new #[Title('Investeringer')] class extends Component
     public string $isin = '';
 
     public string $type = 'portefolje';
+
+    /**
+     * Why the last price update left a holding without a new price, by the id of the holding.
+     *
+     * @var array<int, string>
+     */
+    public array $priceErrors = [];
 
     public function mount(): void
     {
@@ -100,6 +108,7 @@ new #[Title('Investeringer')] class extends Component
             $holding = Holding::query()->findOrFail($this->editingId);
             $this->authorize('update', $holding);
             $holding->update($payload);
+            unset($this->priceErrors[$holding->id]);
         } else {
             $this->authorize('create', Holding::class);
             Auth::user()->holdings()->create($payload);
@@ -121,7 +130,36 @@ new #[Title('Investeringer')] class extends Component
         }
 
         Flux::toast(variant: 'success', text: __('Slettet.'));
+        unset($this->priceErrors[$id]);
         unset($this->holdings, $this->totalValue);
+    }
+
+    public function updatePrices(RefreshHoldingPrices $refresh): void
+    {
+        $this->authorize('viewAny', Holding::class);
+
+        $result = $refresh(Auth::user()->holdings()->whereNotNull('ticker')->orderBy('name')->get());
+
+        $this->priceErrors = [];
+
+        foreach ($result['skipped'] as $row) {
+            $this->priceErrors[$row['holding']->id] = $row['holding']->name.': '.$row['message'];
+        }
+
+        foreach ($result['updated'] as $holding) {
+            // The form still has the old price of the holding being edited, and saving would put it back.
+            if ($holding->id === $this->editingId) {
+                $this->price = (string) $holding->price;
+                $this->value = (string) $holding->value;
+            }
+        }
+
+        unset($this->holdings, $this->totalValue);
+
+        Flux::toast(
+            variant: $result['skipped'] === [] ? 'success' : 'warning',
+            text: sprintf('%d oppdatert, %d hoppet over.', count($result['updated']), count($result['skipped'])),
+        );
     }
 }; ?>
 
@@ -161,6 +199,19 @@ new #[Title('Investeringer')] class extends Component
             @endif
         </div>
     </form>
+
+    @if ($this->holdings->whereNotNull('ticker')->isNotEmpty())
+        <div class="space-y-3">
+            <flux:button type="button" wire:click="updatePrices" data-test="update-prices">{{ __('Oppdater kurser') }}</flux:button>
+            @if ($priceErrors !== [])
+                <div class="space-y-1 rounded-xl border border-red-200 p-4 dark:border-red-900" data-test="price-errors">
+                    @foreach ($priceErrors as $error)
+                        <flux:text>{{ $error }}</flux:text>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endif
 
     <div class="space-y-3">
         @forelse ($this->holdings as $holding)
